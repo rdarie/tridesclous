@@ -242,9 +242,9 @@ class ArrayCollection:
             else:
                 dtype = np.dtype([ (k,v) for k,v in d[name]['dtype']])
             shape = d[name]['shape']
-            if np.prod(d[name]['shape'])>0:
+            if np.prod(d[name]['shape'], dtype=np.int64)>0:
                 arr = np.memmap(self._fname(name), dtype=dtype, mode='r+')
-                arr = arr[:np.prod(shape)]
+                arr = arr[:np.prod(shape, dtype=np.int64)]
                 arr = arr.reshape(shape)
             else:
                 # little hack array is empty
