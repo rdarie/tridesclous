@@ -12,20 +12,20 @@ from .tools import FifoBuffer, median_mad
 
 
 def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
-        highpass_freq=300., lowpass_freq=None, output_dtype='float32', normalize=True, **unused):
+        highpass_freq=300., lowpass_freq=None, output_dtype='float32', normalize=True, filter_order=5, **unused):
     #cast
     sigs = sigs.astype(output_dtype)
     
     #filter
     if highpass_freq is not None:
-        b, a = scipy.signal.iirfilter(5, highpass_freq/sample_rate*2, analog=False,
+        b, a = scipy.signal.iirfilter(filter_order, highpass_freq/sample_rate*2, analog=False,
                                         btype = 'highpass', ftype = 'butter', output = 'ba')
         filtered_sigs = scipy.signal.filtfilt(b, a, sigs, axis=0)
     else:
         filtered_sigs = sigs.copy()
     
     if lowpass_freq is not None:
-        b, a = scipy.signal.iirfilter(5, lowpass_freq/sample_rate*2, analog=False,
+        b, a = scipy.signal.iirfilter(filter_order, lowpass_freq/sample_rate*2, analog=False,
                                         btype = 'lowpass', ftype = 'butter', output = 'ba')
         filtered_sigs = scipy.signal.filtfilt(b, a, filtered_sigs, axis=0)
         
@@ -70,6 +70,7 @@ class SignalPreprocessor_base:
     def change_params(self, common_ref_removal=True,
                                             highpass_freq=300.,
                                             lowpass_freq=None,
+                                            filter_order=5,
                                             smooth_size=0,
                                             output_dtype='float32', 
                                             normalize=True,
@@ -78,7 +79,7 @@ class SignalPreprocessor_base:
                 
         self.signals_medians = signals_medians
         self.signals_mads = signals_mads
-        
+        self.filter_order = filter_order
         self.common_ref_removal = common_ref_removal
         self.highpass_freq = highpass_freq
         self.lowpass_freq = lowpass_freq
@@ -104,7 +105,7 @@ class SignalPreprocessor_base:
         
         if self.highpass_freq is not None:
             if self.highpass_freq>0 and self.highpass_freq<nyquist:
-                coeff_hp = scipy.signal.iirfilter(5, highpass_freq/self.sample_rate*2, analog=False,
+                coeff_hp = scipy.signal.iirfilter(filter_order, highpass_freq/self.sample_rate*2, analog=False,
                                         btype = 'highpass', ftype = 'butter', output = 'sos')
                 self.coefficients = np.concatenate((self.coefficients, coeff_hp))
         
@@ -112,7 +113,7 @@ class SignalPreprocessor_base:
             if self.lowpass_freq>0 and self.lowpass_freq<nyquist:
             #~ if self.lowpass_freq>(self.sample_rate/2.):
                 #~ self.lowpass_freq=(self.sample_rate/2.01)
-                coeff_lp = scipy.signal.iirfilter(5, lowpass_freq/self.sample_rate*2, analog=False,
+                coeff_lp = scipy.signal.iirfilter(filter_order, lowpass_freq/self.sample_rate*2, analog=False,
                                         btype = 'lowpass', ftype = 'butter', output = 'sos')
                 self.coefficients = np.concatenate((self.coefficients, coeff_lp))
         
@@ -299,6 +300,10 @@ class SignalPreprocessor_OpenCL(SignalPreprocessor_base, OpenCL_Helper):
         #TODO make OpenCL for this
         # removal ref
         if self.common_ref_removal:
+            #  import matplotlib.pyplot as plt
+            #  plt.plot(data2); plt.show()
+            #  plt.plot(np.median(data2, axis=1)[:, None]); plt.show()
+            #  import pdb; pdb.set_trace()
             data2 -= np.median(data2, axis=1)[:, None]
         
         #TODO make OpenCL for this

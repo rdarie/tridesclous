@@ -395,6 +395,7 @@ class NDScatter(WidgetBase):
             self.timer_tour.start()
         else:
             self.timer_tour.stop()
+            self.n_face = -1
     
     def new_tour_step(self):
         if self.data is None:

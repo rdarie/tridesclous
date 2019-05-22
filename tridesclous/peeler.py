@@ -12,16 +12,12 @@ import time
 
 import numpy as np
 import scipy.signal
-
+from scipy.spatial.distance import minkowski, chebyshev
 
 from . import signalpreprocessor
 from .peakdetector import  detect_peaks_in_chunk
 
 from .tools import make_color_dict
-
-import matplotlib.pyplot as plt
-#import seaborn as sns
-
 
 from tqdm import tqdm
 
@@ -36,6 +32,8 @@ if HAVE_PYOPENCL:
     import pyopencl
     mf = pyopencl.mem_flags
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 _dtype_spike = [('index', 'int64'), ('cluster_label', 'int64'), ('jitter', 'float64'),]
 
@@ -95,6 +93,9 @@ class Peeler(OpenCL_Helper):
                                         internal_dtype='float32', 
                                         use_sparse_template=False,
                                         sparse_threshold_mad=1.5,
+                                        shape_distance_threshold=2,
+                                        shape_boundary_threshold=4,
+                                        debugging=False,
                                         use_opencl_with_sparse=False,
                                         use_pythran_with_sparse=False,
                                         
@@ -131,11 +132,39 @@ class Peeler(OpenCL_Helper):
         assert catalogue is not None
         self.catalogue = catalogue
         self.chunksize = chunksize
-        self.internal_dtype= internal_dtype
+        self.internal_dtype = internal_dtype
         self.use_sparse_template = use_sparse_template
         self.sparse_threshold_mad = sparse_threshold_mad
         self.use_opencl_with_sparse = use_opencl_with_sparse
         self.use_pythran_with_sparse = use_pythran_with_sparse
+
+        #  RD 03/20/2019
+        self.shape_distance_threshold = shape_distance_threshold
+        #  RD 05/15/2019
+        self.shape_boundary_threshold = shape_boundary_threshold
+        #  import pdb; pdb.set_trace()
+        window1 = scipy.signal.triang(2 * int(-self.catalogue['n_left']) + 1)
+        window2 = scipy.signal.triang(2 * int(self.catalogue['n_right']) + 1)
+        window = np.concatenate(
+            (
+                window1[:int(-self.catalogue['n_left'])],
+                window2[int(self.catalogue['n_right']) + 1:]),
+            axis=-1)
+        #  discount edges a lot
+        window[window < 0.33] = 0.1
+        #  normalize to sum 1, so that the distance is an average
+        #  deviation
+        self.distance_window = (window) / np.sum(window)
+        #  import pdb; pdb.set_trace()
+        #  create a boundary around the mean prediction
+        self.boundary_window = window
+        #  import pdb; pdb.set_trace()
+        self.debugging = debugging
+        if self.debugging:
+            nClusters = catalogue['centers0'].shape[0]
+            self.catalogue.update({'template_distances': [[] for i in range(nClusters)]})
+            self.catalogue.update({'template_deviations': [[] for i in range(nClusters)]})
+            self.catalogue.update({'tallyPlots': 0})
         
         # Some check
         if self.use_opencl_with_sparse or self.use_pythran_with_sparse:
@@ -421,6 +450,45 @@ class Peeler(OpenCL_Helper):
             if extra_spikes.size>0:
                 self.dataio.append_spikes(seg_num=seg_num, chan_grp=chan_grp, spikes=extra_spikes)
         
+        if self.debugging:
+            sns.set_style('white')
+            fig, ax = plt.subplots(1, 2)
+            chanTitle = 'Chan_grp {}'.format(self.catalogue['chan_grp'])
+            print(chanTitle)
+            for idx, distList in enumerate(self.catalogue['template_distances']):
+                theseDist = np.array(distList)
+                this95 = (
+                    np.nanmean(theseDist) +
+                    2 * np.nanstd(theseDist))
+                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseDist))
+                sns.distplot(
+                    theseDist, ax=ax[0],
+                    label=summaryText, bins=np.arange(0, 5, 0.2))
+                ax[0].set_xlim([0, 5])
+                ax[0].set_xlabel('Weighted distance to template')
+                ax[0].set_ylabel('Count (normalized)')
+                print(summaryText)
+                theseDev = np.array(self.catalogue['template_deviations'][idx])
+                this95 = (
+                    np.nanmean(theseDev) +
+                    2 * np.nanstd(theseDev))
+                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseDev))
+                sns.distplot(
+                    theseDev, ax=ax[1],
+                    label=summaryText, bins=np.arange(0, 15, 0.2))
+                ax[1].set_xlim([0, 15])
+                print(summaryText)
+                ax[1].set_xlabel('Weighted deviations from template')
+                ax[1].set_ylabel('Count (normalized)')
+            plt.legend()
+            plt.title(chanTitle)
+            plt.savefig(
+                os.path.join(
+                    self.dataio.dirname,
+                    'templateHist_{}.png'.format(self.catalogue['chan_grp']))
+                )
+            plt.close()
+            #  import pdb; pdb.set_trace()
         self.dataio.flush_processed_signals(seg_num=seg_num, chan_grp=chan_grp)
         self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
 
@@ -609,7 +677,6 @@ class Peeler(OpenCL_Helper):
         #~ print(h0_norm2 > h1_norm2)
         
         
-        
         if h0_norm2 > h1_norm2:
             #order 1 is better than order 0
             h_dot_wf2 = np.dot(h,wf2)
@@ -628,9 +695,71 @@ class Peeler(OpenCL_Helper):
         #~ print(np.sum(wf**2), np.sum((wf-(wf0+jitter1*wf1+jitter1**2/2*wf2))**2))
         #~ print(np.sum(wf**2) > np.sum((wf-(wf0+jitter1*wf1+jitter1**2/2*wf2))**2))
         #~ return k, jitter1
+        pred_wf = (wf0+jitter1*wf1+jitter1**2/2*wf2)
+        #  norm_factor = np.max(np.abs(pred_wf))
+        norm_factor = 1
+        wf_resid = (wf-pred_wf)
+        normalized_deviation = (
+            np.abs(wf_resid) *
+            self.boundary_window)
+        normalized_max_deviation = np.max(normalized_deviation)
+        #  inclusion_criterion = np.sum(wf**2) > self.shape_distance_threshold * np.sum(wf_resid**2)
+        pred_distance = minkowski(
+            wf / norm_factor,
+            pred_wf / norm_factor,
+            p=1, w=self.distance_window)
+        minimizes_energy = np.sum(wf**2) > np.sum(wf_resid**2)
+        inclusion_criterion = (
+            (pred_distance < self.shape_distance_threshold) &
+            (minimizes_energy) &
+            (normalized_max_deviation < self.shape_boundary_threshold)
+        )
+        #  import pdb; pdb.set_trace()
+        if self.debugging:
+            # show near exclusions
+            if (minimizes_energy):
+                self.catalogue['template_distances'][cluster_idx].append(pred_distance)
+                self.catalogue['template_deviations'][cluster_idx].append(normalized_max_deviation)
+            near_distance_miss = pred_distance > (self.shape_distance_threshold * .9)
+            near_boundary_miss = normalized_max_deviation > (self.shape_boundary_threshold * .9)
+            near_miss = near_distance_miss or near_boundary_miss
+            if  (
+                    (near_miss) and
+                    (self.catalogue['tallyPlots'] < 100) and
+                    (inclusion_criterion)):
+            
+                fig, ax = plt.subplots(3,1)
+                ax[0].plot(wf / norm_factor, label='waveform, cluster {}'.format(k))
+                ax[0].plot(pred_wf / norm_factor, label='prediction')
+                ax[0].autoscale(enable=False)
+                ax[0].plot((pred_wf + self.boundary_window**(-1) * self.shape_boundary_threshold) / norm_factor, 'k--')
+                ax[0].plot((pred_wf - self.boundary_window**(-1) * self.shape_boundary_threshold) / norm_factor, 'k--')
 
-        
-        if np.sum(wf**2) > np.sum((wf-(wf0+jitter1*wf1+jitter1**2/2*wf2))**2):
+                ax[0].text(
+                    0, 0,
+                    '{} < {} ({})'.format(
+                        pred_distance, self.shape_distance_threshold,
+                        inclusion_criterion
+                    ), transform=ax[0].transAxes)
+                ax[0].legend()
+                #  import pdb; pdb.set_trace()
+                twAx = ax[1].twinx()
+                ax[1].plot(self.distance_window, label='distance window')
+                ax[1].legend(loc=0)
+                twAx.plot(self.boundary_window, label='boundary window')
+                twAx.legend(loc=1)
+                ax[2].plot(np.abs(self.distance_window * wf_resid), label='windowed residual')
+                ax[2].legend()
+                plt.savefig(
+                    os.path.join(self.dataio.dirname,
+                    'channel_group_{}'.format(self.catalogue['chan_grp']),
+                    'nearMiss_{}.png'.format(self.catalogue['tallyPlots']))
+                    )
+                self.catalogue['tallyPlots'] += 1
+                plt.close()
+                #  import pdb; pdb.set_trace()
+
+        if inclusion_criterion:
             #prediction should be smaller than original (which have noise)
             return k, jitter1
         else:

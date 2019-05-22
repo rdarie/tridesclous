@@ -300,6 +300,7 @@ class CatalogueConstructor:
             signalpreprocessor_engine='numpy',
             highpass_freq=300., 
             lowpass_freq=None,
+            filter_order=5,
             smooth_size=0,
             common_ref_removal=False,
             
@@ -371,7 +372,7 @@ class CatalogueConstructor:
         
         #~ self.arrays.initialize_array('all_peaks', self.memory_mode,  _dtype_peak, (-1, ))
         
-        self.signal_preprocessor_params = dict(highpass_freq=highpass_freq, lowpass_freq=lowpass_freq, 
+        self.signal_preprocessor_params = dict(highpass_freq=highpass_freq, lowpass_freq=lowpass_freq, filter_order=filter_order,
                         smooth_size=smooth_size, common_ref_removal=common_ref_removal,
                         lostfront_chunksize=lostfront_chunksize, output_dtype=internal_dtype,
                         signalpreprocessor_engine=signalpreprocessor_engine)
@@ -1417,6 +1418,7 @@ class CatalogueConstructor:
         
         self.catalogue = {}
         self.catalogue['chan_grp'] = self.chan_grp
+        #  import pdb; pdb.set_trace()
         n_left = self.catalogue['n_left'] = int(self.info['waveform_extractor_params']['n_left'] +2)
         self.catalogue['n_right'] = int(self.info['waveform_extractor_params']['n_right'] -2)
         self.catalogue['peak_width'] = self.catalogue['n_right'] - self.catalogue['n_left']
