@@ -1440,7 +1440,13 @@ class CatalogueConstructor:
         self.catalogue['centers0'] = centers0 # median of wavforms
         self.catalogue['centers1'] = centers1 # median of first derivative of wavforms
         self.catalogue['centers2'] = centers2 # median of second derivative of wavforms
-        
+        # RD 07/26/2019
+        nfeat = self.some_features.shape[1]
+        feature_medians = np.zeros((len(cluster_labels), nfeat), dtype=self.info['internal_dtype'])
+        feature_mads = np.zeros_like(feature_medians)
+        self.catalogue['feature_medians'] = feature_medians # median of wavforms in feature space
+        self.catalogue['feature_mads'] = feature_mads # median abs deviation in feature space
+        # end RD mods
         subsample = np.arange(1.5, full_width-2.5, 1/20.)
         self.catalogue['subsample_ratio'] = 20
         interp_centers0 = np.zeros((len(cluster_labels), subsample.size, nchan), dtype=self.info['internal_dtype'])
@@ -1493,6 +1499,13 @@ class CatalogueConstructor:
             #~ ax.plot(np.arange(full_width-4), center0[2:-2, :], color='b', marker='o')
             #~ ax.plot(subsample-2.,oversampled_center, color='c')
             #~ plt.show()
+            # RD 07/26/2019
+            feat = self.some_features[self.all_peaks['cluster_label'][self.some_peaks_index]==k]
+            theseFeatMedians = np.median(feat, axis=0)
+            theseFeatMads = np.median(np.abs(feat - theseFeatMedians), axis=0) * 1.4826
+            feature_medians[i, :] = theseFeatMedians
+            feature_mads[i, :] = theseFeatMads
+            # end RD mods
             
         #find max  channel for each cluster for peak alignement
         self.catalogue['max_on_channel'] = np.zeros_like(self.catalogue['cluster_labels'])
@@ -1512,8 +1525,11 @@ class CatalogueConstructor:
         self.catalogue['clean_waveforms_params'] = dict(self.info['clean_waveforms_params'])
         self.catalogue['signals_medians'] = np.array(self.signals_medians, copy=True)
         self.catalogue['signals_mads'] = np.array(self.signals_mads, copy=True)
-        
-        
+        #  RD 07/25/2019
+        #  print('self.projector: '.format(self.projector))
+        #  print('self.some_waveforms: '.format(self.some_waveforms))
+        #  if self.projector is not None:
+        #      self.catalogue['projector'] = self.projector
         t2 = time.perf_counter()
         print('make_catalogue', t2-t1)
         

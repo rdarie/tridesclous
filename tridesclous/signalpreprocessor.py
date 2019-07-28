@@ -15,20 +15,41 @@ def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
         highpass_freq=300., lowpass_freq=None, output_dtype='float32', normalize=True, filter_order=5, **unused):
     #cast
     sigs = sigs.astype(output_dtype)
-    
-    #filter
-    if highpass_freq is not None:
-        b, a = scipy.signal.iirfilter(filter_order, highpass_freq/sample_rate*2, analog=False,
-                                        btype = 'highpass', ftype = 'butter', output = 'ba')
-        filtered_sigs = scipy.signal.filtfilt(b, a, sigs, axis=0)
+        
+    if True:
+        w0 = 60
+        notchQ = 10
+        bw = w0/notchQ
+        wn = [w0 - bw/2, w0 + bw/2]
+        sos = scipy.signal.iirfilter(
+            filter_order, [i/sample_rate*2 for i in wn], analog=False,
+                btype = 'bandstop', ftype = 'butter', output = 'sos')
+        filtered_sigs = scipy.signal.sosfiltfilt(sos, sigs, axis=0)
     else:
         filtered_sigs = sigs.copy()
     
+    #filter
+    if highpass_freq is not None:
+        #  b, a = scipy.signal.iirfilter(
+        #      filter_order, highpass_freq/sample_rate*2, analog=False,
+        #          btype = 'highpass', ftype = 'butter', output = 'ba')
+        #  filtered_sigs = scipy.signal.filtfilt(b, a, sigs, axis=0)
+        sos = scipy.signal.iirfilter(
+            filter_order, highpass_freq/sample_rate*2, analog=False,
+                btype = 'highpass', ftype = 'butter', output = 'sos')
+        filtered_sigs = scipy.signal.sosfiltfilt(sos, filtered_sigs, axis=0)
+    #  else:
+    #      filtered_sigs = sigs.copy()
+    
     if lowpass_freq is not None:
-        b, a = scipy.signal.iirfilter(filter_order, lowpass_freq/sample_rate*2, analog=False,
-                                        btype = 'lowpass', ftype = 'butter', output = 'ba')
-        filtered_sigs = scipy.signal.filtfilt(b, a, filtered_sigs, axis=0)
-        
+        #  b, a = scipy.signal.iirfilter(
+        #      filter_order, lowpass_freq/sample_rate*2, analog=False,
+        #          btype = 'lowpass', ftype = 'butter', output = 'ba')
+        #  filtered_sigs = scipy.signal.filtfilt(b, a, filtered_sigs, axis=0)
+        sos = scipy.signal.iirfilter(
+            filter_order, lowpass_freq/sample_rate*2, analog=False,
+                btype = 'lowpass', ftype = 'butter', output = 'sos')
+        filtered_sigs = scipy.signal.sosfiltfilt(sos, filtered_sigs, axis=0)
 
     # common reference removal
     if common_ref_removal:
