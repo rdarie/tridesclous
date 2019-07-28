@@ -159,19 +159,6 @@ class Peeler(OpenCL_Helper):
         self.feature_mask = cum_evr < self.variance_cutoff
         # self.feature_window = evr[self.feature_mask] / np.sum(evr[self.feature_mask])
         self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
-        # TODO: finish building this into the make_catalogue stage
-        #  import pdb; pdb.set_trace()
-        #  cc = CatalogueConstructor(dataio=self.dataio, name='catalogue_constructor', chan_grp=catalogue['chan_grp'])
-        #  self.catalogue['feature_medians'] = np.zeros((self.catalogue['centers0'].shape[0], cc.some_features.shape[1]))
-        #  self.catalogue['feature_mads'] = np.zeros((self.catalogue['centers0'].shape[0], cc.some_features.shape[1]))
-        #  for idx, label in enumerate(cc.positive_cluster_labels):
-        #      peakMask = cc.all_peaks['cluster_label'] == label
-        #      theseFeatures = cc.some_features[peakMask, :]
-        #      theseFeatMedians = np.median(theseFeatures, axis=0)
-        #      theseFeatMads = np.median(np.abs(theseFeatures - theseFeatMedians), axis=0)*1.4826
-        #      self.catalogue['feature_medians'][idx, :] = theseFeatMedians
-        #      self.catalogue['feature_mads'][idx, :] = theseFeatMads
-        #      #  for fe in theseFeatures.T: sns.distplot(fe)
         #####
         window1 = scipy.signal.triang(2 * int(-self.catalogue['n_left']) + 1)
         window2 = scipy.signal.triang(2 * int(self.catalogue['n_right']) + 1)
@@ -187,14 +174,13 @@ class Peeler(OpenCL_Helper):
         self.distance_window = (window) / np.sum(window)
         #   
         #  create a boundary around the mean prediction
-        self.boundary_window = window
-        #   
+        #  self.boundary_window = window
+        #
         self.debugging = debugging
         if self.debugging:
             nClusters = catalogue['centers0'].shape[0]
             self.catalogue.update({'template_distances': [[] for i in range(nClusters)]})
             self.catalogue.update({'energy_reductions': [[] for i in range(nClusters)]})
-            self.catalogue.update({'template_deviations': [[] for i in range(nClusters)]})
             self.catalogue.update({'feat_distances': [[] for i in range(nClusters)]})
             self.catalogue.update({'tallyPlots': 0})
         # end RD Mods
@@ -467,7 +453,7 @@ class Peeler(OpenCL_Helper):
                 continue
             
             # save preprocessed_chunk to file
-            self.dataio.set_signals_chunk(preprocessed_chunk, seg_num=seg_num,chan_grp=chan_grp,
+            self.dataio.set_signals_chunk(preprocessed_chunk, seg_num=seg_num, chan_grp=chan_grp,
                         i_start=sig_index-preprocessed_chunk.shape[0], i_stop=sig_index,
                         signal_type='processed')
             
@@ -484,10 +470,10 @@ class Peeler(OpenCL_Helper):
         
         if self.debugging:
             sns.set_style('white')
-            fig, ax = plt.subplots(1, 4)
-            fig.set_size_inches(16, 4)
+            fig, ax = plt.subplots(1, 3)
+            fig.set_size_inches(12, 4)
             chanTitle = 'Chan_grp {}'.format(self.catalogue['chan_grp'])
-            print(chanTitle)
+            # print(chanTitle)
             for idx, distList in enumerate(self.catalogue['template_distances']):
                 theseDist = np.array(distList)
                 this95 = (
@@ -500,7 +486,7 @@ class Peeler(OpenCL_Helper):
                 ax[0].set_xlim([0, 5])
                 ax[0].set_xlabel('Weighted distance to template')
                 ax[0].set_ylabel('Count (normalized)')
-                print(summaryText)
+                #  print(summaryText)
                 theseEn = np.array(self.catalogue['energy_reductions'][idx])
                 this95 = (
                     np.nanmean(theseEn) +
@@ -510,35 +496,23 @@ class Peeler(OpenCL_Helper):
                     theseEn, ax=ax[1],
                     label=summaryText)
                 #  ax[1].set_xlim([0, 100])
-                print(summaryText)
+                #  print(summaryText)
                 ax[1].set_xlabel('energy reduction')
                 ax[1].set_ylabel('Count (normalized)')
-                theseDev = np.array(self.catalogue['template_deviations'][idx])
-                this95 = (
-                    np.nanmean(theseDev) +
-                    2 * np.nanstd(theseDev))
-                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseDev))
-                sns.distplot(
-                    theseDev, ax=ax[2],
-                    label=summaryText, bins=np.arange(0, 15, 0.2))
-                ax[2].set_xlim([0, 15])
-                print(summaryText)
-                ax[2].set_xlabel('Weighted deviations from template')
-                ax[2].set_ylabel('Count (normalized)')
                 theseFeat = np.array(self.catalogue['feat_distances'][idx])
                 this95 = (
                     np.nanmean(theseFeat) +
                     2 * np.nanstd(theseFeat))
                 summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseFeat))
                 sns.distplot(
-                    theseFeat, ax=ax[3],
+                    theseFeat, ax=ax[2],
                     label=summaryText,
                     bins=np.arange(0, 5, 0.2)
                     )
-                ax[3].set_xlim([0, 5])
+                ax[2].set_xlim([0, 5])
                 print(summaryText)
-                ax[3].set_xlabel('Feature distances from template')
-                ax[3].set_ylabel('Count (normalized)')
+                ax[2].set_xlabel('Feature distances from template')
+                ax[2].set_ylabel('Count (normalized)')
             plt.legend()
             plt.title(chanTitle)
             histPNGName = os.path.join(
@@ -546,7 +520,6 @@ class Peeler(OpenCL_Helper):
                 'templateHist_{}.png'.format(self.catalogue['chan_grp']))
             plt.savefig(histPNGName)
             plt.close()
-            #   
         self.dataio.flush_processed_signals(seg_num=seg_num, chan_grp=chan_grp)
         self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
 
@@ -758,10 +731,10 @@ class Peeler(OpenCL_Helper):
         #  norm_factor = np.max(np.abs(pred_wf))
         norm_factor = 1
         wf_resid = (wf-pred_wf)
-        normalized_deviation = (
-            np.abs(wf_resid) *
-            self.boundary_window)
-        normalized_max_deviation = np.max(normalized_deviation)
+        #  normalized_deviation = (
+        #      np.abs(wf_resid) *
+        #      self.boundary_window)
+        #  normalized_max_deviation = np.max(normalized_deviation)
         #   
         pred_distance = minkowski(
             wf / norm_factor,
@@ -809,54 +782,49 @@ class Peeler(OpenCL_Helper):
             # show near exclusions
             if (minimizes_energy):
                 self.catalogue['template_distances'][cluster_idx].append(pred_distance)
-                self.catalogue['template_deviations'][cluster_idx].append(normalized_max_deviation)
                 self.catalogue['energy_reductions'][cluster_idx].append(energy_reduction)
                 self.catalogue['feat_distances'][cluster_idx].append(feat_distance)
-            near_distance_miss = pred_distance > (self.shape_distance_threshold * .9)
-            near_boundary_miss = normalized_max_deviation > (self.shape_boundary_threshold * .9)
-            near_miss = near_distance_miss or near_boundary_miss
+            near_miss = feat_distance > (self.shape_distance_threshold * .9)
             if  (
                     (near_miss) and
                     (self.catalogue['tallyPlots'] < 100) and
                     (inclusion_criterion)):
                 #
-                fig, ax = plt.subplots(4, 1)
-                fig.set_size_inches(4, 12)
+                fig, ax = plt.subplots(2, 1)
+                fig.set_size_inches(4, 8)
                 ax[0].plot(wf / norm_factor, label='waveform, cluster {}'.format(k))
                 ax[0].plot(pred_wf / norm_factor, label='prediction')
                 ax[0].autoscale(enable=False)
-                ax[0].plot((pred_wf + self.boundary_window**(-1) * self.shape_boundary_threshold) / norm_factor, 'k--')
-                ax[0].plot((pred_wf - self.boundary_window**(-1) * self.shape_boundary_threshold) / norm_factor, 'k--')
+                ax[0].plot((pred_wf + 3) / norm_factor, 'k--')
+                ax[0].plot((pred_wf - 3) / norm_factor, 'k--')
                 #
                 ax[0].text(
                     0, 0,
-                    '{:.2f} < {} ({})'.format(
-                        pred_distance, self.shape_distance_threshold,
-                        inclusion_criterion
-                    ), transform=ax[0].transAxes)
+                    'shape distance: {:.2f}'.format(pred_distance),
+                    transform=ax[0].transAxes)
                 ax[0].legend()
                 #   
-                twAx = ax[1].twinx()
-                ax[1].plot(self.distance_window, label='distance window')
-                ax[1].legend(loc=0)
-                twAx.plot(self.boundary_window, label='boundary window')
-                twAx.legend(loc=1)
-                ax[2].plot(np.abs(self.distance_window * wf_resid), label='windowed residual')
-                ax[2].text(
-                    0, 0,
-                    '{:.2f} energy reduction'.format(
-                        energy_reduction
-                    ), transform=ax[2].transAxes)
-                ax[2].legend()
-                ax[3].plot(np.squeeze(feat), label='feature, cluster {}'.format(k))
-                ax[3].plot(np.squeeze(pred_feat), label='prediction')
-                ax[3].text(
+                #  twAx = ax[1].twinx()
+                #  ax[1].plot(self.distance_window, label='distance window')
+                #  ax[1].legend(loc=0)
+                #  twAx.plot(self.boundary_window, label='boundary window')
+                #  twAx.legend(loc=1)
+                #  ax[2].plot(np.abs(self.distance_window * wf_resid), label='windowed residual')
+                #  ax[2].text(
+                #      0, 0,
+                #      '{:.2f} energy reduction'.format(
+                #          energy_reduction
+                #      ), transform=ax[2].transAxes)
+                #  ax[2].legend()
+                ax[1].plot(np.squeeze(feat), label='feature, cluster {}'.format(k))
+                ax[1].plot(np.squeeze(pred_feat), label='prediction')
+                ax[1].text(
                     0, 0,
                     '{:.2f} < {} ({})'.format(
                         feat_distance, self.shape_distance_threshold,
                         inclusion_criterion
-                    ), transform=ax[3].transAxes)
-                ax[3].legend()
+                    ), transform=ax[1].transAxes)
+                ax[1].legend()
                 plt.savefig(
                     os.path.join(
                         self.dataio.dirname,
