@@ -14,8 +14,18 @@ from sklearn.neighbors import KernelDensity
 from . import labelcodes
 from .tools import median_mad
 
-
 import matplotlib.pyplot as plt
+try:
+    import isosplit5
+    HAVE_ISOSPLIT5 = True
+except:
+    HAVE_ISOSPLIT5 = False
+
+try:
+    import hdbscan
+    HAVE_HDBSCAN = True
+except:
+    HAVE_HDBSCAN = False
 
 
 def find_clusters(catalogueconstructor, method='kmeans', selection=None, **kargs):
@@ -44,7 +54,7 @@ def find_clusters(catalogueconstructor, method='kmeans', selection=None, **kargs
         gmm = sklearn.mixture.GaussianMixture(n_components=kargs.pop('n_clusters'), **kargs)
         #~ labels =gmm.fit_predict(features)
         gmm.fit(features)
-        labels =gmm.predict(features)
+        labels = gmm.predict(features)
     #~ elif method == 'kmedois':
         #~ import pyclust
         #~ km = pyclust.KMedoids(n_clusters=kargs.pop('n_clusters'))
@@ -53,8 +63,26 @@ def find_clusters(catalogueconstructor, method='kmeans', selection=None, **kargs
         agg = sklearn.cluster.AgglomerativeClustering(n_clusters=kargs.pop('n_clusters'), **kargs)
         labels = agg.fit_predict(features)
     elif method == 'dbscan':
+        if 'eps' not in kargs:
+            kargs['eps'] = 3
+        if 'metric' not in kargs:
+            kargs['metric'] = 'euclidean'
+        if 'algorithm' not in kargs:
+            kargs['algorithm'] = 'brute'
         dbscan = sklearn.cluster.DBSCAN(**kargs)
         labels = dbscan.fit_predict(features)
+    elif method == 'optics':
+        optic = sklearn.cluster.OPTICS(**kargs)
+        labels = optic.fit_predict(features)
+    elif method == 'spectral':
+        specter = sklearn.cluster.SpectralClustering(n_clusters=kargs.pop('n_clusters'), **kargs)
+        labels = specter.fit_predict(features)
+    elif method == 'hdbscan':
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=kargs.pop('min_cluster_size'), **kargs)
+        labels = clusterer.fit_predict(features)
+    elif method == 'meanshift':
+        ms = sklearn.cluster.MeanShift()
+        labels = ms.fit_predict(features)
     elif method == 'sawchaincut':
         n_left = cc.info['waveform_extractor_params']['n_left']
         n_right = cc.info['waveform_extractor_params']['n_right']

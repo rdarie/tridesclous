@@ -37,9 +37,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import seaborn as sns
 
-_dtype_spike = [('index', 'int64'), ('cluster_label', 'int64'), ('jitter', 'float64'),]
+_dtype_spike = [('index', 'int64'), ('cluster_label', 'int64'), ('jitter', 'float64'), ('feature_distance', 'float64')]
 
-Spike = namedtuple('Spike', ('index', 'cluster_label', 'jitter'))
+Spike = namedtuple('Spike', ('index', 'cluster_label', 'jitter', 'feature_distance'))
 
 
 from .labelcodes import (LABEL_TRASH, LABEL_UNCLASSIFIED, LABEL_ALIEN)
@@ -141,7 +141,7 @@ class Peeler(OpenCL_Helper):
         self.use_pythran_with_sparse = use_pythran_with_sparse
 
         #  RD 03/20/2019
-        self.distance_order = 2
+        self.distance_order = 1
         self.shape_distance_threshold = shape_distance_threshold
         #  RD 05/15/2019
         self.shape_boundary_threshold = shape_boundary_threshold
@@ -151,14 +151,26 @@ class Peeler(OpenCL_Helper):
             self.dataio.dirname,
             'channel_group_{}'.format(catalogue['chan_grp']),
             'catalogue_constructor', 'projector.pickle')
-        with open(projectorPath, 'rb') as f:
-            self.projector = pickle.load(f)['projector']
-        evr = self.projector.pcas[0].explained_variance_ratio_
-        cum_evr = np.cumsum(evr)
-        self.variance_cutoff = 0.75
-        self.feature_mask = cum_evr < self.variance_cutoff
-        # self.feature_window = evr[self.feature_mask] / np.sum(evr[self.feature_mask])
-        self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
+        #  TODO: supervised projector
+        #  supervisedProjectorPath = os.path.join(
+        #      self.dataio.dirname,
+        #      'channel_group_{}'.format(catalogue['chan_grp']),
+        #      'catalogue_constructor', 'supervised_projector.pickle')
+        #  if os.path.exists(supervisedProjectorPath):
+        #      with open(supervisedProjectorPath, 'rb') as f:
+        #          self.projector = pickle.load(f)['projector']
+        if os.path.exists(projectorPath):
+            with open(projectorPath, 'rb') as f:
+                self.projector = pickle.load(f)['projector']
+        #  evr = self.projector.explained_variance_ratio_
+        #  cum_evr = np.cumsum(evr)
+        #  self.variance_cutoff = 0.75
+        #  self.feature_mask = cum_evr < self.variance_cutoff
+        #  self.feature_mask[0] = True
+        self.feature_window = None
+        #  self.feature_window = evr[self.feature_mask] / np.sum(evr[self.feature_mask])
+        self.feature_mask = np.ones((self.projector.n_components), dtype=np.bool)
+        #  self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
         #####
         window1 = scipy.signal.triang(2 * int(-self.catalogue['n_left']) + 1)
         window2 = scipy.signal.triang(2 * int(self.catalogue['n_right']) + 1)
@@ -172,10 +184,8 @@ class Peeler(OpenCL_Helper):
         #  normalize to sum 1, so that the distance is an average
         #  deviation
         self.distance_window = (window) / np.sum(window)
-        #   
         #  create a boundary around the mean prediction
         #  self.boundary_window = window
-        #
         self.debugging = debugging
         if self.debugging:
             nClusters = catalogue['centers0'].shape[0]
@@ -467,7 +477,9 @@ class Peeler(OpenCL_Helper):
             self.total_spike += extra_spikes.size
             if extra_spikes.size>0:
                 self.dataio.append_spikes(seg_num=seg_num, chan_grp=chan_grp, spikes=extra_spikes)
-        
+
+        self.dataio.flush_processed_signals(seg_num=seg_num, chan_grp=chan_grp)
+        self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
         if self.debugging:
             sns.set_style('white')
             fig, ax = plt.subplots(1, 3)
@@ -475,44 +487,47 @@ class Peeler(OpenCL_Helper):
             chanTitle = 'Chan_grp {}'.format(self.catalogue['chan_grp'])
             # print(chanTitle)
             for idx, distList in enumerate(self.catalogue['template_distances']):
-                theseDist = np.array(distList)
-                this95 = (
-                    np.nanmean(theseDist) +
-                    2 * np.nanstd(theseDist))
-                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseDist))
-                sns.distplot(
-                    theseDist, ax=ax[0],
-                    label=summaryText, bins=np.arange(0, 5, 0.2))
-                ax[0].set_xlim([0, 5])
-                ax[0].set_xlabel('Weighted distance to template')
-                ax[0].set_ylabel('Count (normalized)')
-                #  print(summaryText)
-                theseEn = np.array(self.catalogue['energy_reductions'][idx])
-                this95 = (
-                    np.nanmean(theseEn) +
-                    2 * np.nanstd(theseEn))
-                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseEn))
-                sns.distplot(
-                    theseEn, ax=ax[1],
-                    label=summaryText)
-                #  ax[1].set_xlim([0, 100])
-                #  print(summaryText)
-                ax[1].set_xlabel('energy reduction')
-                ax[1].set_ylabel('Count (normalized)')
-                theseFeat = np.array(self.catalogue['feat_distances'][idx])
-                this95 = (
-                    np.nanmean(theseFeat) +
-                    2 * np.nanstd(theseFeat))
-                summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseFeat))
-                sns.distplot(
-                    theseFeat, ax=ax[2],
-                    label=summaryText,
-                    bins=np.arange(0, 5, 0.2)
-                    )
-                ax[2].set_xlim([0, 5])
-                print(summaryText)
-                ax[2].set_xlabel('Feature distances from template')
-                ax[2].set_ylabel('Count (normalized)')
+                try:
+                    theseDist = np.array(distList)
+                    this95 = (
+                        np.nanmean(theseDist) +
+                        2 * np.nanstd(theseDist))
+                    summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseDist))
+                    sns.distplot(
+                        theseDist, ax=ax[0],
+                        label=summaryText, bins=np.arange(0, 5, 0.2))
+                    ax[0].set_xlim([0, 5])
+                    ax[0].set_xlabel('Weighted distance to template')
+                    ax[0].set_ylabel('Count (normalized)')
+                    #  print(summaryText)
+                    theseEn = np.array(self.catalogue['energy_reductions'][idx])
+                    this95 = (
+                        np.nanmean(theseEn) +
+                        2 * np.nanstd(theseEn))
+                    summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseEn))
+                    sns.distplot(
+                        theseEn, ax=ax[1],
+                        label=summaryText)
+                    #  ax[1].set_xlim([0, 100])
+                    #  print(summaryText)
+                    ax[1].set_xlabel('energy reduction')
+                    ax[1].set_ylabel('Count (normalized)')
+                    theseFeat = np.array(self.catalogue['feat_distances'][idx])
+                    this95 = (
+                        np.nanmean(theseFeat) +
+                        2 * np.nanstd(theseFeat))
+                    summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseFeat))
+                    sns.distplot(
+                        theseFeat, ax=ax[2],
+                        label=summaryText,
+                        bins=np.arange(0, 5, 0.2)
+                        )
+                    ax[2].set_xlim([0, 5])
+                    print(summaryText)
+                    ax[2].set_xlabel('Feature distances from template')
+                    ax[2].set_ylabel('Count (normalized)')
+                except Exception:
+                    print('Error in peeler.run_offline_loop_one_segment( diagnostic plots')
             plt.legend()
             plt.title(chanTitle)
             histPNGName = os.path.join(
@@ -520,8 +535,6 @@ class Peeler(OpenCL_Helper):
                 'templateHist_{}.png'.format(self.catalogue['chan_grp']))
             plt.savefig(histPNGName)
             plt.close()
-        self.dataio.flush_processed_signals(seg_num=seg_num, chan_grp=chan_grp)
-        self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
 
     def run_offline_all_segment(self, **kargs):
         #TODO remove chan_grp here because it is redundant from catalogue['chan_grp']
@@ -550,26 +563,29 @@ class Peeler(OpenCL_Helper):
             # too near right limits no label
             label = LABEL_RIGHT_LIMIT
             jitter = 0
+            feature_distance = 0
         elif ind<=maximum_jitter_shift:
             # too near left limits no label
             #~ print('     LABEL_LEFT_LIMIT', ind)
             label = LABEL_LEFT_LIMIT
             jitter = 0
+            feature_distance = 0
         elif catalogue['centers0'].shape[0]==0:
             # empty catalogue
             label  = LABEL_UNCLASSIFIED
             jitter = 0
+            feature_distance = 0
         else:
             waveform = residual[ind:ind+width,:]
-            
             if self.alien_value_threshold is not None and \
                     np.any(np.abs(waveform)>self.alien_value_threshold) :
                 label  = LABEL_ALIEN
                 jitter = 0
+                feature_distance = 0
             else:
                 
                 #~ t1 = time.perf_counter()
-                label, jitter = self.estimate_one_jitter(waveform)
+                label, jitter, feature_distance = self.estimate_one_jitter(waveform)
                 #~ t2 = time.perf_counter()
                 #~ print('  estimate_one_jitter', (t2-t1)*1000.)
 
@@ -602,10 +618,10 @@ class Peeler(OpenCL_Helper):
                             #TODO: force to label anyway the spike if spike is at the left of FIFO
                         else:
                             waveform = residual[ind:ind+width,:]
-                            new_label, new_jitter = self.estimate_one_jitter(waveform)
+                            new_label, new_jitter, new_feature_distance = self.estimate_one_jitter(waveform)
                             if np.abs(new_jitter)<np.abs(prev_jitter):
                                 #~ print('keep shift')
-                                label, jitter = new_label, new_jitter
+                                label, jitter, feature_distance = new_label, new_jitter, new_feature_distance
                                 local_index += shift
                             else:
                                 #~ print('no keep shift worst jitter')
@@ -619,7 +635,7 @@ class Peeler(OpenCL_Helper):
             elif (local_pos+width) >=residual.shape[0]:
                 label = LABEL_RIGHT_LIMIT
         
-        return Spike(local_index, label, jitter)
+        return Spike(local_index, label, jitter, feature_distance)
     
     
     def estimate_one_jitter(self, waveform):
@@ -662,14 +678,17 @@ class Peeler(OpenCL_Helper):
                                 catalogue['centers0'],  catalogue['sparse_mask'])
             cluster_idx = np.argmin(s)
         else:
-            # replace by this (indentique but faster, a but)
-            
+            # replace by this (indentique but faster, a but)            
             #~ t1 = time.perf_counter()
-            d = catalogue['centers0'] - waveform[None, :, :]
+            temp_wvf = np.pad(waveform, ((2,2), (0,0)), 'edge')
+            temp_feat = self.projector.transform(temp_wvf[np.newaxis, :, :])
+            d = catalogue['feature_medians'] - temp_feat
+            #d = catalogue['centers0'] - waveform[None, :, :]
             d *= d
             #s = d.sum(axis=1).sum(axis=1)  # intuitive
             #s = d.reshape(d.shape[0], -1).sum(axis=1) # a bit faster
-            s = np.einsum('ijk->i', d) # a bit faster
+            #s = np.einsum('ijk->i', d) # a bit faster
+            s = np.einsum('ij->i', d) # a bit faster
             cluster_idx = np.argmin(s)
             #~ t2 = time.perf_counter()
             #~ print('    np.argmin V2', (t2-t1)*1000., cluster_idx)
@@ -742,23 +761,28 @@ class Peeler(OpenCL_Helper):
             p=self.distance_order, w=self.distance_window)
         #  feature space metrics
         #  import pdb; pdb.set_trace()
-        pred_feat = self.projector.transform(np.pad(pred_wf, 2, 'edge')[np.newaxis, :, np.newaxis])
+        #  pred_feat = self.projector.transform(np.pad(pred_wf, 2, 'edge')[np.newaxis, :, np.newaxis])
+        #  try:
+        #      pred_feat = (pred_feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
+        #  except:
+        #      print('on chan_grp {}'.format(catalogue['chan_grp']))
+        #      import traceback; traceback.print_exc()
+        #      import pdb; pdb.set_trace()
+        #  pred_feat = pred_feat[:, self.feature_mask]
+        feat = self.projector.transform(np.pad(wf, 2, 'edge')[np.newaxis, :, np.newaxis])
+        feat = (feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
+        feat = feat[:, self.feature_mask]
+        #  feat_resid = (feat - pred_feat)
         try:
-            pred_feat = (pred_feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
+            feat_distance = np.max(np.abs(feat))
+            # feat_distance = minkowski(
+            #     feat,
+            #     pred_feat,
+            #     p=self.distance_order, w=self.feature_window)
         except:
             print('on chan_grp {}'.format(catalogue['chan_grp']))
             import traceback; traceback.print_exc()
             import pdb; pdb.set_trace()
-        pred_feat = pred_feat[:, self.feature_mask]
-        feat = self.projector.transform(np.pad(wf, 2, 'edge')[np.newaxis, :, np.newaxis])
-        feat = (feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
-        feat = feat[:, self.feature_mask]
-        feat_resid = (feat - pred_feat)
-        # 
-        feat_distance = minkowski(
-            feat,
-            pred_feat,
-            p=self.distance_order, w=self.feature_window)
         # criteria
         energy_reduction = (np.sum(wf**2) - np.sum(wf_resid**2)) / wf.shape[0]
         minimizes_energy = energy_reduction > 0
@@ -773,9 +797,7 @@ class Peeler(OpenCL_Helper):
             (normalized_max_deviation < 2 * self.shape_boundary_threshold))
         inclusion_criterion = shape_criterion or reduction_criterion
         '''
-        shape_criterion = (
-            (feat_distance < self.shape_distance_threshold)
-            )
+        shape_criterion = (feat_distance < self.shape_distance_threshold)
         inclusion_criterion = minimizes_energy & shape_criterion
         #
         if self.debugging:
@@ -817,7 +839,7 @@ class Peeler(OpenCL_Helper):
                 #      ), transform=ax[2].transAxes)
                 #  ax[2].legend()
                 ax[1].plot(np.squeeze(feat), label='feature, cluster {}'.format(k))
-                ax[1].plot(np.squeeze(pred_feat), label='prediction')
+                #  ax[1].plot(np.squeeze(pred_feat), label='prediction')
                 ax[1].text(
                     0, 0,
                     '{:.2f} < {} ({})'.format(
@@ -836,11 +858,11 @@ class Peeler(OpenCL_Helper):
                 #
         if inclusion_criterion:
             #prediction should be smaller than original (which have noise)
-            return k, jitter1
+            return k, jitter1, feat_distance
         else:
             #otherwise the prediction is bad
             #~ print('bad prediction')
-            return LABEL_UNCLASSIFIED, 0.
+            return LABEL_UNCLASSIFIED, 0., 0.
 
 
 def make_prediction_signals(spikes, dtype, shape, catalogue, safe=True):

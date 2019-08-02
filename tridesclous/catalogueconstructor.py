@@ -11,7 +11,7 @@ import os
 import json
 from collections import OrderedDict
 import time
-import pickle
+import dill as pickle
 import itertools
 import datetime
 import shutil
@@ -1541,6 +1541,19 @@ class CatalogueConstructor:
         
         """
         self.make_catalogue()
+        # import pdb; pdb.set_trace()
+        ccFolderName = os.path.dirname(self.info_filename)
+        projectorPath = os.path.join(ccFolderName, 'projector.pickle')
+        if self.projector is None:
+            with open(projectorPath, 'rb') as f:
+                self.projector = pickle.load(f)['projector']
+        #import pdb; pdb.set_trace()
+        hasWvfMask = self.all_peaks['cluster_label'] > (-11)
+        trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
+        self.projector.fit(self.some_waveforms, labels=trainingLabels)
+        supervisedProjectorPath = os.path.join(ccFolderName, 'supervised_projector.pickle')
+        with open(supervisedProjectorPath, 'wb') as f:
+            pickle.dump({'projector': self.projector}, f)
         self.dataio.save_catalogue(self.catalogue, name='initial')
         
     def create_savepoint(self):

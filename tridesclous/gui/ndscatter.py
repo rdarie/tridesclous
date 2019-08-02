@@ -20,7 +20,8 @@ from .. import labelcodes
 class MyViewBox(pg.ViewBox):
     doubleclicked = QT.pyqtSignal()
     gain_zoom = QT.pyqtSignal(float)
-    #~ xsize_zoom = QT.pyqtSignal(float)
+    x_pos = QT.pyqtSignal(float)
+    y_pos = QT.pyqtSignal(float)
     #~ lasso_started = QT.pyqtSignal()
     lasso_drawing = QT.pyqtSignal(object)
     lasso_finished = QT.pyqtSignal(object)
@@ -32,11 +33,16 @@ class MyViewBox(pg.ViewBox):
         
     def mouseClickEvent(self, ev):
         ev.accept()
+        pos = self.mapToView(ev.pos())
+        if ev.button() != 1:
+            self.x_pos.emit(pos.x())
+            self.y_pos.emit(pos.y())
     def mouseDoubleClickEvent(self, ev):
         self.doubleclicked.emit()
         ev.accept()
-    def mouseDragEvent(self, ev):
-        ev.ignore()
+    # RD 08012019
+    # def mouseDragEvent(self, ev):
+    #     ev.ignore()
     def wheelEvent(self, ev, axis=None):
         if ev.modifiers() == QT.Qt.ControlModifier:
             z = 10 if ev.delta()>0 else 1/10.
@@ -46,18 +52,17 @@ class MyViewBox(pg.ViewBox):
         ev.accept()
     def mouseDragEvent(self, ev):
         ev.accept()
-        if ev.button()!=1: return
-        
-        if ev.isStart():
-            self.drag_points = []
-        
         pos = self.mapToView(ev.pos())
-        self.drag_points.append([pos.x(), pos.y()])
-        
-        if ev.isFinish():
-            self.lasso_finished.emit(self.drag_points)
-        else:
-            self.lasso_drawing.emit(self.drag_points)
+        if ev.button() == 1:
+            if ev.isStart():
+                self.drag_points = []
+
+            self.drag_points.append([pos.x(), pos.y()])
+
+            if ev.isFinish():
+                self.lasso_finished.emit(self.drag_points)
+            else:
+                self.lasso_drawing.emit(self.drag_points)
         
 
 class NDScatter(WidgetBase):
@@ -234,6 +239,8 @@ class NDScatter(WidgetBase):
             return
         self.viewBox = MyViewBox()
         self.viewBox.gain_zoom.connect(self.gain_zoom)
+        self.viewBox.x_pos.connect(self.x_pos)
+        self.viewBox.y_pos.connect(self.y_pos)
         #~ self.viewBox.lasso_started.connect(self.on_lasso_started)
         self.viewBox.lasso_drawing.connect(self.on_lasso_drawing)
         self.viewBox.lasso_finished.connect(self.on_lasso_finished)
@@ -263,6 +270,8 @@ class NDScatter(WidgetBase):
         med, mad = median_mad(self.data)
         m = 4.*np.max(mad)
         self.limit = m
+        self.x_center = 0
+        self.y_center = 0
         self.plot.setXRange(-m, m)
         self.plot.setYRange(-m, m)
         
@@ -369,7 +378,6 @@ class NDScatter(WidgetBase):
                 self.scatter_noise.show()
         else:
             self.scatter_noise.hide()
-        
         #projection axes
         proj = self.projection.copy()
         proj[~self.selected_comp, :] = 0
@@ -424,8 +432,22 @@ class NDScatter(WidgetBase):
     def gain_zoom(self, factor):
         self.limit /= factor
         l = float(self.limit)
-        self.plot.setXRange(-l, l)
-        self.plot.setYRange(-l, l)
+        x = float(self.x_center)
+        y = float(self.y_center)
+        self.plot.setXRange(-l + x, l + x)
+        self.plot.setYRange(-l + y, l + y)
+
+    def x_pos(self, newx):
+        print('newx = {}'.format(newx))
+        self.x_center = newx
+        l = float(self.limit)
+        self.plot.setXRange(-l + float(newx), l + float(newx))
+    
+    def y_pos(self, newy):
+        print('newy = {}'.format(newy))
+        self.y_center = newy
+        l = float(self.limit)
+        self.plot.setYRange(-l + float(newy), l + float(newy))
     
     def on_scatter_clicked(self,plots, points):
         self.controller.spike_selection[:] = False
