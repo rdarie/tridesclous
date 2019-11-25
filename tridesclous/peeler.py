@@ -152,25 +152,35 @@ class Peeler(OpenCL_Helper):
             'channel_group_{}'.format(catalogue['chan_grp']),
             'catalogue_constructor', 'projector.pickle')
         #  TODO: supervised projector
-        #  supervisedProjectorPath = os.path.join(
-        #      self.dataio.dirname,
-        #      'channel_group_{}'.format(catalogue['chan_grp']),
-        #      'catalogue_constructor', 'supervised_projector.pickle')
-        #  if os.path.exists(supervisedProjectorPath):
-        #      with open(supervisedProjectorPath, 'rb') as f:
-        #          self.projector = pickle.load(f)['projector']
-        if os.path.exists(projectorPath):
+        supervisedProjectorPath = os.path.join(
+            self.dataio.dirname,
+            'channel_group_{}'.format(catalogue['chan_grp']),
+            'catalogue_constructor', 'supervised_projector.pickle')
+        if os.path.exists(supervisedProjectorPath):
+            with open(supervisedProjectorPath, 'rb') as f:
+                self.projector = pickle.load(f)['projector']
+        elif os.path.exists(projectorPath):
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
+        classifierPath = os.path.join(
+            self.dataio.dirname,
+            'channel_group_{}'.format(catalogue['chan_grp']),
+            'catalogue_constructor', 'classifier.pickle')
+        if os.path.exists(classifierPath):
+            with open(classifierPath, 'rb') as f:
+                self.classifier = pickle.load(f)['classifier']
+        else:
+            self.classifier = None
         #  evr = self.projector.explained_variance_ratio_
         #  cum_evr = np.cumsum(evr)
         #  self.variance_cutoff = 0.75
         #  self.feature_mask = cum_evr < self.variance_cutoff
         #  self.feature_mask[0] = True
-        self.feature_window = None
+        #  self.feature_window = None
         #  self.feature_window = evr[self.feature_mask] / np.sum(evr[self.feature_mask])
+        self.confidence_threshold = 0.5
         self.feature_mask = np.ones((self.projector.n_components), dtype=np.bool)
-        #  self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
+        self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
         #####
         window1 = scipy.signal.triang(2 * int(-self.catalogue['n_left']) + 1)
         window2 = scipy.signal.triang(2 * int(self.catalogue['n_right']) + 1)
@@ -187,12 +197,15 @@ class Peeler(OpenCL_Helper):
         #  create a boundary around the mean prediction
         #  self.boundary_window = window
         self.debugging = debugging
-        if self.debugging:
-            nClusters = catalogue['centers0'].shape[0]
-            self.catalogue.update({'template_distances': [[] for i in range(nClusters)]})
-            self.catalogue.update({'energy_reductions': [[] for i in range(nClusters)]})
-            self.catalogue.update({'feat_distances': [[] for i in range(nClusters)]})
-            self.catalogue.update({'tallyPlots': 0})
+        nClusters = catalogue['centers0'].shape[0]
+        self.catalogue.update(
+            {'template_distances': [[] for i in range(nClusters)]})
+        self.catalogue.update(
+            {'energy_reductions': [[] for i in range(nClusters)]})
+        self.catalogue.update(
+            {'feat_distances': [[] for i in range(nClusters)]})
+        self.catalogue.update(
+            {'tallyPlots': 0})
         # end RD Mods
         # Some check
         if self.use_opencl_with_sparse or self.use_pythran_with_sparse:
@@ -678,27 +691,34 @@ class Peeler(OpenCL_Helper):
                                 catalogue['centers0'],  catalogue['sparse_mask'])
             cluster_idx = np.argmin(s)
         else:
-            # replace by this (indentique but faster, a but)            
+            orig_wf = np.pad(waveform, ((2,2), (0,0)), 'edge')
+            feat = self.projector.transform(orig_wf[np.newaxis, :, :])
+            # replace by this (indentique but faster, a but)
             #~ t1 = time.perf_counter()
-            temp_wvf = np.pad(waveform, ((2,2), (0,0)), 'edge')
-            temp_feat = self.projector.transform(temp_wvf[np.newaxis, :, :])
-            d = catalogue['feature_medians'] - temp_feat
-            #d = catalogue['centers0'] - waveform[None, :, :]
+            #d = catalogue['feature_medians'] - temp_feat
+            d = catalogue['centers0'] - waveform[None, :, :]
             d *= d
             #s = d.sum(axis=1).sum(axis=1)  # intuitive
             #s = d.reshape(d.shape[0], -1).sum(axis=1) # a bit faster
-            #s = np.einsum('ijk->i', d) # a bit faster
-            s = np.einsum('ij->i', d) # a bit faster
+            s = np.einsum('ijk->i', d) # a bit faster
+            #s = np.einsum('ij->i', d) # a bit faster
             cluster_idx = np.argmin(s)
             #~ t2 = time.perf_counter()
             #~ print('    np.argmin V2', (t2-t1)*1000., cluster_idx)
+            k = catalogue['cluster_labels'][cluster_idx]
+            if self.classifier is not None:
+                confidence = np.max(self.classifier.predict_proba(feat)[0])
+                temp_k = self.classifier.predict(feat)[0]
+                if confidence > self.confidence_threshold:
+                    if temp_k == -1:
+                        return LABEL_UNCLASSIFIED, 0., 0.
+                    else:
+                        k = temp_k
+                        cluster_idx = np.flatnonzero(catalogue['cluster_labels'] == k)[0]
         
-
-        k = catalogue['cluster_labels'][cluster_idx]
-        chan = catalogue['max_on_channel'][cluster_idx]
         #~ print('cluster_idx', cluster_idx, 'k', k, 'chan', chan)
+        chan = catalogue['max_on_channel'][cluster_idx]
 
-        
         #~ return k, 0.
 
         wf0 = catalogue['centers0'][cluster_idx,: , chan]
@@ -760,53 +780,45 @@ class Peeler(OpenCL_Helper):
             pred_wf / norm_factor,
             p=self.distance_order, w=self.distance_window)
         #  feature space metrics
-        #  import pdb; pdb.set_trace()
-        #  pred_feat = self.projector.transform(np.pad(pred_wf, 2, 'edge')[np.newaxis, :, np.newaxis])
-        #  try:
-        #      pred_feat = (pred_feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
-        #  except:
-        #      print('on chan_grp {}'.format(catalogue['chan_grp']))
-        #      import traceback; traceback.print_exc()
-        #      import pdb; pdb.set_trace()
-        #  pred_feat = pred_feat[:, self.feature_mask]
-        feat = self.projector.transform(np.pad(wf, 2, 'edge')[np.newaxis, :, np.newaxis])
-        feat = (feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
-        feat = feat[:, self.feature_mask]
-        #  feat_resid = (feat - pred_feat)
+        normal_feat = (feat - catalogue['feature_medians'][cluster_idx]) / catalogue['feature_mads'][cluster_idx]
+        normal_feat = normal_feat[:, self.feature_mask]
         try:
-            feat_distance = np.max(np.abs(feat))
-            # feat_distance = minkowski(
-            #     feat,
-            #     pred_feat,
-            #     p=self.distance_order, w=self.feature_window)
+            # feat_distance = np.max(np.abs(feat))
+            feat_distance = minkowski(
+                normal_feat,
+                np.zeros_like(normal_feat),
+                p=self.distance_order, w=self.feature_window)
         except:
             print('on chan_grp {}'.format(catalogue['chan_grp']))
             import traceback; traceback.print_exc()
-            import pdb; pdb.set_trace()
         # criteria
         energy_reduction = (np.sum(wf**2) - np.sum(wf_resid**2)) / wf.shape[0]
         minimizes_energy = energy_reduction > 0
-        '''
-        shape_criterion = (
-            (pred_distance < self.shape_distance_threshold) &
-            (minimizes_energy) &
-            (normalized_max_deviation < self.shape_boundary_threshold)
-        )
-        reduction_criterion = (
-            (energy_reduction > self.energy_reduction_threshold) &
-            (normalized_max_deviation < 2 * self.shape_boundary_threshold))
-        inclusion_criterion = shape_criterion or reduction_criterion
-        '''
-        shape_criterion = (feat_distance < self.shape_distance_threshold)
-        inclusion_criterion = minimizes_energy & shape_criterion
-        #
+        shape_criterion = (pred_distance < self.shape_distance_threshold)
+        shape_excluder = (pred_distance > 3 * self.shape_distance_threshold)
+        feat_criterion = (feat_distance < self.shape_distance_threshold)
+        feat_excluder = (feat_distance > 3 * self.shape_distance_threshold)
+        exclusion_criterion = (not (shape_excluder or feat_excluder))
+        if self.classifier is not None:
+            inclusion_criterion = (
+                minimizes_energy &
+                (confidence > self.confidence_threshold) &
+                exclusion_criterion
+                )
+        else:
+            inclusion_criterion = (
+                minimizes_energy &
+                (shape_criterion or feat_criterion) &
+                exclusion_criterion
+                )
+        # log quality measurements
+        if (inclusion_criterion):
+            self.catalogue['template_distances'][cluster_idx].append(pred_distance)
+            self.catalogue['energy_reductions'][cluster_idx].append(energy_reduction)
+            self.catalogue['feat_distances'][cluster_idx].append(feat_distance)
         if self.debugging:
             # show near exclusions
-            if (minimizes_energy):
-                self.catalogue['template_distances'][cluster_idx].append(pred_distance)
-                self.catalogue['energy_reductions'][cluster_idx].append(energy_reduction)
-                self.catalogue['feat_distances'][cluster_idx].append(feat_distance)
-            near_miss = feat_distance > (self.shape_distance_threshold * .9)
+            near_miss = pred_distance > (self.shape_distance_threshold * .9)
             if  (
                     (near_miss) and
                     (self.catalogue['tallyPlots'] < 100) and
@@ -838,7 +850,7 @@ class Peeler(OpenCL_Helper):
                 #          energy_reduction
                 #      ), transform=ax[2].transAxes)
                 #  ax[2].legend()
-                ax[1].plot(np.squeeze(feat), label='feature, cluster {}'.format(k))
+                ax[1].plot(np.squeeze(normal_feat), label='feature, cluster {}'.format(k))
                 #  ax[1].plot(np.squeeze(pred_feat), label='prediction')
                 ax[1].text(
                     0, 0,

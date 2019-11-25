@@ -438,13 +438,13 @@ class NDScatter(WidgetBase):
         self.plot.setYRange(-l + y, l + y)
 
     def x_pos(self, newx):
-        print('newx = {}'.format(newx))
+        # print('newx = {}'.format(newx))
         self.x_center = newx
         l = float(self.limit)
         self.plot.setXRange(-l + float(newx), l + float(newx))
     
     def y_pos(self, newy):
-        print('newy = {}'.format(newy))
+        # print('newy = {}'.format(newy))
         self.y_center = newy
         l = float(self.limit)
         self.plot.setYRange(-l + float(newy), l + float(newy))
