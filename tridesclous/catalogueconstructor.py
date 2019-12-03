@@ -468,9 +468,6 @@ class CatalogueConstructor:
     
     
     def run_signalprocessor_loop_one_segment(self, seg_num=0, duration=60., detect_peak=True):
-        
-
-        
         length = int(duration*self.dataio.sample_rate)
         length = min(length, self.dataio.get_segment_length(seg_num))
         length -= length%self.chunksize
@@ -480,7 +477,6 @@ class CatalogueConstructor:
         self.flush_info()
         
         #initialize engines
-        
         p = dict(self.signal_preprocessor_params)
         p.pop('signalpreprocessor_engine')
         p['normalize'] = True
@@ -490,8 +486,10 @@ class CatalogueConstructor:
         
         self.peakdetector.change_params(**self.peak_detector_params)
         
-        iterator = self.dataio.iter_over_chunk(seg_num=seg_num, chan_grp=self.chan_grp, chunksize=self.chunksize, i_stop=length,
-                                                    signal_type='initial')
+        iterator = self.dataio.iter_over_chunk(
+            seg_num=seg_num, chan_grp=self.chan_grp,
+            chunksize=self.chunksize, i_stop=length,
+            signal_type='initial')
         for pos, sigs_chunk in iterator:
             #~ print(seg_num, pos, sigs_chunk.shape)
             self.signalprocessor_one_chunk(pos, sigs_chunk, seg_num, detect_peak=detect_peak)
@@ -1418,7 +1416,7 @@ class CatalogueConstructor:
         
         self.catalogue = {}
         self.catalogue['chan_grp'] = self.chan_grp
-        #  import pdb; pdb.set_trace()
+        
         n_left = self.catalogue['n_left'] = int(self.info['waveform_extractor_params']['n_left'] +2)
         self.catalogue['n_right'] = int(self.info['waveform_extractor_params']['n_right'] -2)
         self.catalogue['peak_width'] = self.catalogue['n_right'] - self.catalogue['n_left']
@@ -1457,7 +1455,7 @@ class CatalogueConstructor:
         if self.projector is None:
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
-        # import pdb; pdb.set_trace()
+        
         hasWvfMask = self.all_peaks['cluster_label'] > (-11)
         trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
         self.projector.fit(self.some_waveforms, labels=trainingLabels)
@@ -1467,7 +1465,7 @@ class CatalogueConstructor:
             pickle.dump({'projector': self.projector}, f)
         classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
         # we create an instance of Neighbours Classifier and fit the data.
-        # import pdb; pdb.set_trace()
+        
         clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors=30, weights='distance')
         clf.fit(newFeatures, y=trainingLabels)
         with open(classifierPath, 'wb') as f:
@@ -1562,7 +1560,7 @@ class CatalogueConstructor:
         
         """
         self.make_catalogue()
-        # import pdb; pdb.set_trace()
+        
         self.dataio.save_catalogue(self.catalogue, name='initial')
         
     def create_savepoint(self):

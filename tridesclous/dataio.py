@@ -654,7 +654,7 @@ class DataIO:
                 try:
                     spikes = self.get_spikes(seg_num=seg_num, chan_grp=chan_grp)
                 except Exception:
-                    # import pdb; pdb.set_trace()
+                    
                     continue
                 
                 if spikes is None: continue

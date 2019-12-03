@@ -98,6 +98,7 @@ class Peeler(OpenCL_Helper):
                                         shape_distance_threshold=2,
                                         shape_boundary_threshold=3,
                                         energy_reduction_threshold=15,
+                                        confidence_threshold=0.6,
                                         debugging=False,
                                         use_opencl_with_sparse=False,
                                         use_pythran_with_sparse=False,
@@ -169,8 +170,10 @@ class Peeler(OpenCL_Helper):
         if os.path.exists(classifierPath):
             with open(classifierPath, 'rb') as f:
                 self.classifier = pickle.load(f)['classifier']
+            self.confidence_threshold = confidence_threshold
         else:
             self.classifier = None
+            self.confidence_threshold = None
         #  evr = self.projector.explained_variance_ratio_
         #  cum_evr = np.cumsum(evr)
         #  self.variance_cutoff = 0.75
@@ -178,7 +181,6 @@ class Peeler(OpenCL_Helper):
         #  self.feature_mask[0] = True
         #  self.feature_window = None
         #  self.feature_window = evr[self.feature_mask] / np.sum(evr[self.feature_mask])
-        self.confidence_threshold = 0.5
         self.feature_mask = np.ones((self.projector.n_components), dtype=np.bool)
         self.feature_window = np.ones((self.feature_mask.sum())) / self.feature_mask.sum()
         #####
@@ -795,9 +797,9 @@ class Peeler(OpenCL_Helper):
         energy_reduction = (np.sum(wf**2) - np.sum(wf_resid**2)) / wf.shape[0]
         minimizes_energy = energy_reduction > 0
         shape_criterion = (pred_distance < self.shape_distance_threshold)
-        shape_excluder = (pred_distance > 3 * self.shape_distance_threshold)
+        shape_excluder = (pred_distance > self.shape_distance_threshold)
         feat_criterion = (feat_distance < self.shape_distance_threshold)
-        feat_excluder = (feat_distance > 3 * self.shape_distance_threshold)
+        feat_excluder = (feat_distance > self.shape_distance_threshold)
         exclusion_criterion = (not (shape_excluder or feat_excluder))
         if self.classifier is not None:
             inclusion_criterion = (

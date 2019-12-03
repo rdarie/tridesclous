@@ -23,7 +23,7 @@ def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
         wn = [w0 - bw/2, w0 + bw/2]
         sos = scipy.signal.iirfilter(
             filter_order, [i/sample_rate*2 for i in wn], analog=False,
-                btype = 'bandstop', ftype = 'butter', output = 'sos')
+                btype='bandstop', ftype='butter', output='sos')
         filtered_sigs = scipy.signal.sosfiltfilt(sos, sigs, axis=0)
     else:
         filtered_sigs = sigs.copy()
@@ -36,7 +36,7 @@ def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
         #  filtered_sigs = scipy.signal.filtfilt(b, a, sigs, axis=0)
         sos = scipy.signal.iirfilter(
             filter_order, highpass_freq/sample_rate*2, analog=False,
-                btype = 'highpass', ftype = 'butter', output = 'sos')
+                btype='highpass', ftype= 'butter', output='sos')
         filtered_sigs = scipy.signal.sosfiltfilt(sos, filtered_sigs, axis=0)
     #  else:
     #      filtered_sigs = sigs.copy()
@@ -48,10 +48,11 @@ def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
         #  filtered_sigs = scipy.signal.filtfilt(b, a, filtered_sigs, axis=0)
         sos = scipy.signal.iirfilter(
             filter_order, lowpass_freq/sample_rate*2, analog=False,
-                btype = 'lowpass', ftype = 'butter', output = 'sos')
+                btype='lowpass', ftype='butter', output='sos')
         filtered_sigs = scipy.signal.sosfiltfilt(sos, filtered_sigs, axis=0)
 
     # common reference removal
+
     if common_ref_removal:
         filtered_sigs = filtered_sigs - np.median(filtered_sigs, axis=1)[:, None]
     
@@ -75,29 +76,28 @@ def estimate_medians_mads_after_preprocesing(sigs, sample_rate, **params):
     filtered_sigs = offline_signal_preprocessor(sigs, sample_rate, **params2)
     med, mad = median_mad(filtered_sigs, axis=0)
     return med, mad
-    
-    
-    
 
 
 class SignalPreprocessor_base:
-    def __init__(self,sample_rate, nb_channel, chunksize, input_dtype):
+    def __init__(
+            self, sample_rate, nb_channel,
+            chunksize, input_dtype):
         self.sample_rate = sample_rate
         self.nb_channel = nb_channel
         self.chunksize = chunksize
         self.input_dtype = input_dtype
-
     
-    def change_params(self, common_ref_removal=True,
-                                            highpass_freq=300.,
-                                            lowpass_freq=None,
-                                            filter_order=5,
-                                            smooth_size=0,
-                                            output_dtype='float32', 
-                                            normalize=True,
-                                            lostfront_chunksize = None,
-                                            signals_medians=None, signals_mads=None):
-                
+    def change_params(
+            self, common_ref_removal=True,
+            highpass_freq=300.,
+            lowpass_freq=None,
+            filter_order=5,
+            smooth_size=0,
+            output_dtype='float32',
+            normalize=True,
+            lostfront_chunksize=None,
+            signals_medians=None, signals_mads=None):
+
         self.signals_medians = signals_medians
         self.signals_mads = signals_mads
         self.filter_order = filter_order
@@ -123,7 +123,17 @@ class SignalPreprocessor_base:
         self.coefficients = np.zeros((0, 6))
         
         nyquist = self.sample_rate/2.
-        
+        #
+        if True:
+            w0 = 60
+            notchQ = 10
+            bw = w0/notchQ
+            wn = [w0 - bw/2, w0 + bw/2]
+            coeff_notch = scipy.signal.iirfilter(
+                filter_order, [i/self.sample_rate*2 for i in wn], analog=False,
+                    btype='bandstop', ftype='butter', output='sos')
+            self.coefficients = np.concatenate((self.coefficients, coeff_notch))
+        #
         if self.highpass_freq is not None:
             if self.highpass_freq>0 and self.highpass_freq<nyquist:
                 coeff_hp = scipy.signal.iirfilter(filter_order, highpass_freq/self.sample_rate*2, analog=False,
@@ -145,9 +155,6 @@ class SignalPreprocessor_base:
             coeff_smooth = np.array([[b0, b1, b2, 1,0,0]], dtype=self.output_dtype)
             coeff_smooth = np.tile(coeff_smooth, (self.smooth_size, 1))
             self.coefficients = np.concatenate((self.coefficients, coeff_smooth))
-        
-        
-        
         
         if self.coefficients.shape[0]==0:
             #this is the null filter
@@ -236,7 +243,20 @@ class SignalPreprocessor_Numpy(SignalPreprocessor_base):
         
         # removal ref
         if self.common_ref_removal:
-            data2 -= np.median(data2, axis=1)[:, None]
+            coeff_common_ref = scipy.signal.iirfilter(
+                self.filter_order, 500/self.sample_rate*2,
+                analog=False, btype='lowpass', ftype='butter', output='sos')
+            common_ref = scipy.signal.sosfiltfilt(
+                coeff_common_ref, np.mean(data2, axis=1),
+                )[:, None]
+            #  import matplotlib.pyplot as plt
+            #  plt.plot(np.mean(data2, axis=1))
+            #  plt.plot(common_ref.flatten())
+            #  plt.show()
+            #  import pdb; pdb.set_trace()
+            data2 -= common_ref
+            #  data2 -= np.median(data2, axis=1)[:, None]
+            #  data2 -= np.mean(data2, axis=1)[:, None]
         
         #normalize
         if self.normalize:
@@ -324,7 +344,7 @@ class SignalPreprocessor_OpenCL(SignalPreprocessor_base, OpenCL_Helper):
             #  import matplotlib.pyplot as plt
             #  plt.plot(data2); plt.show()
             #  plt.plot(np.median(data2, axis=1)[:, None]); plt.show()
-            #  import pdb; pdb.set_trace()
+            
             data2 -= np.median(data2, axis=1)[:, None]
         
         #TODO make OpenCL for this
