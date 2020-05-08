@@ -712,10 +712,14 @@ class Peeler(OpenCL_Helper):
                 confidence = np.max(self.classifier.predict_proba(feat)[0])
                 temp_k = self.classifier.predict(feat)[0]
                 if confidence > self.confidence_threshold:
-                    if temp_k == -1:
+                    if (temp_k == -1):
                         return LABEL_UNCLASSIFIED, 0., 0.
+                    elif (temp_k == -9):
+                        return LABEL_ALIEN, 0., 0.
                     else:
                         k = temp_k
+                        if not len(np.flatnonzero(catalogue['cluster_labels'] == k)):
+                            import pdb; pdb.set_trace()
                         cluster_idx = np.flatnonzero(catalogue['cluster_labels'] == k)[0]
         
         #~ print('cluster_idx', cluster_idx, 'k', k, 'chan', chan)
@@ -739,7 +743,6 @@ class Peeler(OpenCL_Helper):
         wf2_norm2 = catalogue['wf2_norm2'][cluster_idx]
         wf1_dot_wf2 = catalogue['wf1_dot_wf2'][cluster_idx]
         
-        
         h = wf - wf0
         h0_norm2 = h.dot(h)
         h_dot_wf1 = h.dot(wf1)
@@ -747,7 +750,6 @@ class Peeler(OpenCL_Helper):
         h1_norm2 = np.sum((h-jitter0*wf1)**2)
         #~ print(h0_norm2, h1_norm2)
         #~ print(h0_norm2 > h1_norm2)
-        
         
         if h0_norm2 > h1_norm2:
             #order 1 is better than order 0

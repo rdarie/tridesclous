@@ -1455,7 +1455,7 @@ class CatalogueConstructor:
         if self.projector is None:
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
-        
+        #
         hasWvfMask = self.all_peaks['cluster_label'] > (-11)
         trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
         self.projector.fit(self.some_waveforms, labels=trainingLabels)
@@ -1465,7 +1465,6 @@ class CatalogueConstructor:
             pickle.dump({'projector': self.projector}, f)
         classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
         # we create an instance of Neighbours Classifier and fit the data.
-        
         clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors=30, weights='distance')
         clf.fit(newFeatures, y=trainingLabels)
         with open(classifierPath, 'wb') as f:
@@ -1474,7 +1473,6 @@ class CatalogueConstructor:
         self.catalogue['label_to_index'] = {}
         for i, k in enumerate(cluster_labels):
             self.catalogue['label_to_index'][k] = i
-              
             #print('construct_catalogue', k)
             # take peak of this cluster
             # and reshaape (nb_peak, nb_channel, nb_csample)
@@ -1494,7 +1492,6 @@ class CatalogueConstructor:
             wf1[:, 1:-1, :] = (wf0[:, 2:,: ] - wf0[:, :-2,: ])/2.
             wf2 = np.zeros_like(wf1)
             wf2[:, 1:-1, :] = (wf1[:, 2:,: ] - wf1[:, :-2,: ])/2.
-            
             
             #median and
             #eliminate margin because of border effect of derivative and reshape
