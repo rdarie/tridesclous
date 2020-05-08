@@ -91,4 +91,4 @@ docs/_build/
 target/
 
 # vscode
-.vscode/
+.vscode/ftp-sync.json

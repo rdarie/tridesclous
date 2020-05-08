@@ -1,0 +1,28 @@
+{
+    "remotePath": "/gpfs_home/YOUR_USERNAME/Github/tridesclous",
+    "host": "ssh.ccv.brown.edu",
+    "username": "YOUR_USERNAME",
+    "password": "YOUR_ PASSWORD",
+    "port": 22,
+    "secure": true,
+    "protocol": "sftp",
+    "uploadOnSave": true,
+    "passive": false,
+    "debug": false,
+    "privateKeyPath": null,
+    "passphrase": null,
+    "agent": null,
+    "allow": [],
+    "ignore": [
+        "\\.vscode",
+        "\\.git",
+        "\\__pycache__",
+        "\\.DS_Store"
+    ],
+    "generatedFiles": {
+        "extensionsToInclude": [
+            ""
+        ],
+        "path": ""
+    }
+}
