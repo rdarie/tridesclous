@@ -6,3 +6,4 @@ matplotlib==3.0.3
 seaborn==0.9.1.dev0
 tqdm==4.36.1
 pyqtgraph==0.10.0
+neo==0.8.0.dev1
