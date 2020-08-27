@@ -1,21 +1,32 @@
 import scipy.signal
 import numpy as np
-
+import matplotlib.pyplot as plt
 from .cltools import HAVE_PYOPENCL, OpenCL_Helper
 if HAVE_PYOPENCL:
     import pyopencl
     mf = pyopencl.mem_flags
 
-
+import pdb
 #~ from pyacq.dsp.overlapfiltfilt import SosFiltfilt_Scipy
 from .tools import FifoBuffer, median_mad
 
+DEBUGGING = False
 
 def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
+        fill_overflow=False,
         highpass_freq=300., lowpass_freq=None, output_dtype='float32', normalize=True, filter_order=5, **unused):
-    #cast
+    #  cast
     sigs = sigs.astype(output_dtype)
-        
+    # import pdb; pdb.set_trace()
+    if fill_overflow:
+        # import pdb; pdb.set_trace()
+        sigsDiff = np.diff(sigs, axis=0)
+        for colIdx in range(sigs.shape[1]):
+            idxOverflow = np.flatnonzero(np.abs(sigsDiff[:, colIdx]) > 2e4)
+            # import matplotlib.pyplot as plt          
+            for oIdx in idxOverflow:
+                sigs[oIdx+1:, colIdx] = sigs[oIdx+1:, colIdx] - sigsDiff[oIdx, colIdx]
+                # plt.plot(chunk[cIdx:cIdx + 100]); plt.show()
     if True:
         w0 = 60
         notchQ = 10
@@ -89,6 +100,7 @@ class SignalPreprocessor_base:
     
     def change_params(
             self, common_ref_removal=True,
+            fill_overflow=False,
             highpass_freq=300.,
             lowpass_freq=None,
             filter_order=5,
@@ -102,6 +114,7 @@ class SignalPreprocessor_base:
         self.signals_mads = signals_mads
         self.filter_order = filter_order
         self.common_ref_removal = common_ref_removal
+        self.fill_overflow = fill_overflow
         self.highpass_freq = highpass_freq
         self.lowpass_freq = lowpass_freq
         self.smooth_size = int(smooth_size)
@@ -195,10 +208,50 @@ class SignalPreprocessor_Numpy(SignalPreprocessor_base):
         
         
         #Online filtfilt
+        overFlowFillType = '2**15'
+        overFlowThreshold = 1.6e4
         chunk = data.astype(self.output_dtype)
+        if DEBUGGING:
+            # pdb.set_trace()
+            plt.plot(chunk[:, 0], '.-', label='original')
+        if self.fill_overflow:
+            chunkDiff = np.diff(chunk, axis=0)
+            for colIdx in range(chunk.shape[1]):
+                diffExceeds = np.abs(chunkDiff[:, colIdx]) > overFlowThreshold
+                # valueExceeds = np.abs(chunk[:-1, colIdx]) > overFlowThreshold / 2
+                idxOverflow = np.flatnonzero(diffExceeds)
+                if idxOverflow.size > 0:
+                    if chunkDiff[idxOverflow[0], colIdx] < 0:
+                        fixDir = 'negative'
+                    else:
+                        fixDir = 'positive'
+                    # plt.plot(chunk[:, colIdx])
+                    for oIdx in idxOverflow:
+                        if oIdx + 1 < chunk.shape[0]:
+                            if overFlowFillType == '2**15':
+                                if (chunkDiff[oIdx, colIdx] < 0) and (fixDir == 'negative'):
+                                    chunk[oIdx+1:, colIdx] = chunk[oIdx+1:, colIdx] + (2**15 + 2**10)
+                                    fixDir = 'positive'
+                                elif (chunkDiff[oIdx, colIdx] > 0) and (fixDir == 'positive'):
+                                    chunk[oIdx+1:, colIdx] = chunk[oIdx+1:, colIdx] - (2**15 + 2**10)
+                                    fixDir = 'negative'
+                            else:
+                                if (chunkDiff[oIdx, colIdx] < 0) and (fixDir == 'negative'):
+                                    chunk[oIdx+1:, colIdx] = chunk[oIdx+1:, colIdx] - chunkDiff[oIdx, colIdx]
+                                    fixDir = 'positive'
+                                elif (chunkDiff[oIdx, colIdx] > 0) and (fixDir == 'positive'):
+                                    chunk[oIdx+1:, colIdx] = chunk[oIdx+1:, colIdx] - chunkDiff[oIdx, colIdx]
+                                    fixDir = 'negative'
+                # plt.plot(chunk[:, colIdx]); plt.show()
+        if DEBUGGING:
+            plt.plot(chunk[:, 0], '.--', label='filled')
         forward_chunk_filtered, self.zi = scipy.signal.sosfilt(self.coefficients, chunk, zi=self.zi, axis=0)
         forward_chunk_filtered = forward_chunk_filtered.astype(self.output_dtype)
-        
+        if DEBUGGING:
+            plt.plot(forward_chunk_filtered[:, 0], label='filtered')
+            plt.legend()
+            plt.show()
+        # forward_chunk_filtered[np.isnan(forward_chunk_filtered) | np.isinf(forward_chunk_filtered)] = 0
         self.forward_buffer.new_chunk(forward_chunk_filtered, index=pos)
         
         #OLD implementation
@@ -223,10 +276,17 @@ class SignalPreprocessor_Numpy(SignalPreprocessor_base):
             
         # NEW IMPLENTATION
         backward_chunk = self.forward_buffer.buffer
+        if DEBUGGING:
+            plt.plot(backward_chunk[:, 0], label='backward_chunk')
+
         backward_filtered = scipy.signal.sosfilt(self.coefficients, backward_chunk[::-1, :], zi=None, axis=0)
         backward_filtered = backward_filtered[::-1, :]
         backward_filtered = backward_filtered.astype(self.output_dtype)
-        
+        # backward_filtered[np.isnan(backward_filtered) | np.isinf(backward_filtered)] = 0
+        if DEBUGGING:
+            plt.plot(backward_filtered[:, 0], label='backward_filtered')
+            plt.legend()
+            plt.show()
         pos2 = pos-self.lostfront_chunksize
         if pos2<0:
             return None, None

@@ -1,5 +1,5 @@
 import numpy as np
-
+import pdb, traceback
 import sklearn
 import sklearn.decomposition
 
@@ -82,7 +82,13 @@ class GlobalUMAP:
             n_components=n_components, n_neighbors=n_neighbors,
             min_dist=min_dist, metric=metric,
             **params)
-        self.umap.fit(flatten_waveforms)
+        try:
+            self.umap.fit(flatten_waveforms)
+        except:
+            print('###########################################################')
+            print(cc)
+            traceback.print_exc()
+            print('###########################################################')
         #In GlobalPCA all feature represent all channels
         self.channel_to_features = np.ones((cc.nb_channel, self.n_components), dtype='bool')
     

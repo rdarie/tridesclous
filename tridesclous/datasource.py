@@ -207,7 +207,7 @@ class NeoRawIOAggregator(DataSourceBase):
                 self.total_channel = len(sig_channels)
             else:
                 assert np.all(sig_channels==self.sig_channels), 'bad joke different channels!'
-            
+        # import pdb; pdb.set_trace()    
         self.nb_segment = len(self.segments)
         
         self.dtype = np.dtype(self.sig_channels['dtype'][0])
