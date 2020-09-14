@@ -12,9 +12,11 @@ from .tools import FifoBuffer, median_mad
 
 DEBUGGING = False
 
-def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
-        fill_overflow=False,
-        highpass_freq=300., lowpass_freq=None, output_dtype='float32', normalize=True, filter_order=5, **unused):
+def offline_signal_preprocessor(
+        sigs, sample_rate, common_ref_removal=True,
+        fill_overflow=False, highpass_freq=300., lowpass_freq=None,
+        common_ref_freq=None, notch_freq=None,
+        output_dtype='float32', normalize=True, filter_order=5, **unused):
     #  cast
     sigs = sigs.astype(output_dtype)
     # import pdb; pdb.set_trace()
@@ -27,15 +29,15 @@ def offline_signal_preprocessor(sigs, sample_rate, common_ref_removal=True,
             for oIdx in idxOverflow:
                 sigs[oIdx+1:, colIdx] = sigs[oIdx+1:, colIdx] - sigsDiff[oIdx, colIdx]
                 # plt.plot(chunk[cIdx:cIdx + 100]); plt.show()
-    if True:
-        w0 = 60
+    if notch_freq is not None:
+        w0 = notch_freq
         notchQ = 10
         bw = w0/notchQ
         wn = [w0 - bw/2, w0 + bw/2]
         sos = scipy.signal.iirfilter(
             filter_order, [i/sample_rate*2 for i in wn], analog=False,
                 btype='bandstop', ftype='butter', output='sos')
-        filtered_sigs = scipy.signal.sosfiltfilt(sos, sigs, axis=0)
+        filtered_sigs = scipy.signal.sosfiltfilt(sos, sigs.copy(), axis=0)
     else:
         filtered_sigs = sigs.copy()
     
@@ -103,6 +105,8 @@ class SignalPreprocessor_base:
             fill_overflow=False,
             highpass_freq=300.,
             lowpass_freq=None,
+            notch_freq=None,
+            common_ref_freq=None,
             filter_order=5,
             smooth_size=0,
             output_dtype='float32',
@@ -116,6 +120,8 @@ class SignalPreprocessor_base:
         self.common_ref_removal = common_ref_removal
         self.fill_overflow = fill_overflow
         self.highpass_freq = highpass_freq
+        self.common_ref_freq = common_ref_freq
+        self.notch_freq = notch_freq
         self.lowpass_freq = lowpass_freq
         self.smooth_size = int(smooth_size)
         self.output_dtype = np.dtype(output_dtype)
@@ -137,28 +143,31 @@ class SignalPreprocessor_base:
         
         nyquist = self.sample_rate/2.
         #
-        if True:
+        if self.notch_freq is not None:
             w0 = 60
             notchQ = 10
             bw = w0/notchQ
             wn = [w0 - bw/2, w0 + bw/2]
             coeff_notch = scipy.signal.iirfilter(
-                filter_order, [i/self.sample_rate*2 for i in wn], analog=False,
-                    btype='bandstop', ftype='butter', output='sos')
+                filter_order,
+                [i for i in wn], analog=False, fs=self.sample_rate,
+                btype='bandstop', ftype='butter', output='sos')
             self.coefficients = np.concatenate((self.coefficients, coeff_notch))
         #
         if self.highpass_freq is not None:
-            if self.highpass_freq>0 and self.highpass_freq<nyquist:
-                coeff_hp = scipy.signal.iirfilter(filter_order, highpass_freq/self.sample_rate*2, analog=False,
-                                        btype = 'highpass', ftype = 'butter', output = 'sos')
+            if self.highpass_freq > 0 and self.highpass_freq < nyquist:
+                coeff_hp = scipy.signal.iirfilter(
+                    filter_order, highpass_freq, analog=False, fs=self.sample_rate,
+                    btype='highpass', ftype='butter', output='sos')
                 self.coefficients = np.concatenate((self.coefficients, coeff_hp))
         
         if self.lowpass_freq is not None:
-            if self.lowpass_freq>0 and self.lowpass_freq<nyquist:
+            if self.lowpass_freq > 0 and self.lowpass_freq < nyquist:
             #~ if self.lowpass_freq>(self.sample_rate/2.):
                 #~ self.lowpass_freq=(self.sample_rate/2.01)
-                coeff_lp = scipy.signal.iirfilter(filter_order, lowpass_freq/self.sample_rate*2, analog=False,
-                                        btype = 'lowpass', ftype = 'butter', output = 'sos')
+                coeff_lp = scipy.signal.iirfilter(
+                    filter_order, lowpass_freq, analog=False, fs=self.sample_rate,
+                    btype='lowpass', ftype='butter', output='sos')
                 self.coefficients = np.concatenate((self.coefficients, coeff_lp))
         
         if self.smooth_size>0:
@@ -171,10 +180,10 @@ class SignalPreprocessor_base:
         
         if self.coefficients.shape[0]==0:
             #this is the null filter
-            self.coefficients = np.array([[1, 0, 0, 1,0,0]], dtype=self.output_dtype)
+            self.coefficients = np.array([[1, 0, 0, 1, 0, 0]], dtype=self.output_dtype)
         
         #~ self.filtfilt_engine = SosFiltfilt_Scipy(self.coefficients, self.nb_channel, output_dtype, self.chunksize, lostfront_chunksize)
-        self.nb_section =self. coefficients.shape[0]
+        self.nb_section = self.coefficients.shape[0]
         self.forward_buffer = FifoBuffer((self.backward_chunksize, self.nb_channel), self.output_dtype)
         self.zi = np.zeros((self.nb_section, 2, self.nb_channel), dtype= self.output_dtype)
         
@@ -195,9 +204,6 @@ class SignalPreprocessor_Numpy(SignalPreprocessor_base):
     """
         
     def process_data(self, pos, data):
-        
-        
-
         #TODO this cause problem for peakdetector_opencl
         # because pos is not multiple  chunksize
 
@@ -300,24 +306,59 @@ class SignalPreprocessor_Numpy(SignalPreprocessor_base):
             data2 = data2[data2.shape[0]-pos2:]
         
         #~ print('pos', pos, 'pos2', pos2, data2.shape)
-        
+        plotting = False
+        if plotting:
+            import matplotlib.pyplot as plt
+            tBase = np.arange(data2.shape[0]) * self.sample_rate ** (-1)
+            plt.plot(
+                tBase, data2, label='data')
+            plt.plot(
+                tBase, np.mean(data2, axis=1),
+                '--', lw=3, label='mean')
+            plt.plot(
+                tBase, np.median(data2, axis=1),
+                '--', lw=3, label='median')
         # removal ref
         if self.common_ref_removal:
-            coeff_common_ref = scipy.signal.iirfilter(
-                self.filter_order, 500/self.sample_rate*2,
-                analog=False, btype='lowpass', ftype='butter', output='sos')
-            common_ref = scipy.signal.sosfiltfilt(
-                coeff_common_ref, np.mean(data2, axis=1),
-                )[:, None]
-            #  import matplotlib.pyplot as plt
-            #  plt.plot(np.mean(data2, axis=1))
-            #  plt.plot(common_ref.flatten())
-            #  plt.show()
-            #  import pdb; pdb.set_trace()
-            data2 -= common_ref
-            #  data2 -= np.median(data2, axis=1)[:, None]
-            #  data2 -= np.mean(data2, axis=1)[:, None]
-        
+            ref_type = 'filtered_median'
+            if ref_type == 'filtered_mean':
+                coeff_common_ref = scipy.signal.iirfilter(
+                    self.filter_order, self.common_ref_freq,
+                    analog=False, fs=self.sample_rate, btype='lowpass',
+                    ftype='butter', output='sos')
+                common_ref = scipy.signal.sosfiltfilt(
+                    coeff_common_ref, np.mean(data2, axis=1),
+                    )[:, None]
+            elif ref_type == 'filtered_median':
+                coeff_common_ref = scipy.signal.iirfilter(
+                    self.filter_order, self.common_ref_freq,
+                    analog=False, fs=self.sample_rate, btype='lowpass',
+                    ftype='butter', output='sos')
+                common_ref = scipy.signal.sosfiltfilt(
+                    coeff_common_ref, np.median(data2, axis=1),
+                    )[:, None]
+            if plotting:
+                if ref_type == 'filtered_mean':
+                    plt.plot(
+                        tBase, common_ref.flatten(), '--', lw=3, label='filtered_mean')
+                if ref_type == 'filtered_median':
+                    plt.plot(
+                        tBase, common_ref.flatten(), '--', lw=3, label='filtered_median')
+                # pdb.set_trace()
+            #
+            if ref_type == 'filtered_mean':
+                data2 -= common_ref
+            elif ref_type == 'filtered_median':
+                data2 -= common_ref
+            elif ref_type == 'median':
+                data2 -= np.median(data2, axis=1)[:, None]
+            else:
+                data2 -= np.mean(data2, axis=1)[:, None]
+            #
+        if plotting:
+            plt.legend()
+            plt.show()
+
         #normalize
         if self.normalize:
             data2 -= self.signals_medians

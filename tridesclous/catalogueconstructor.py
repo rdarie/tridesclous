@@ -301,6 +301,8 @@ class CatalogueConstructor:
             fill_overflow=False,
             highpass_freq=300., 
             lowpass_freq=None,
+            notch_freq=None,
+            common_ref_freq=None,
             filter_order=5,
             smooth_size=0,
             common_ref_removal=False,
@@ -374,13 +376,14 @@ class CatalogueConstructor:
         #~ self.arrays.initialize_array('all_peaks', self.memory_mode,  _dtype_peak, (-1, ))
         
         self.signal_preprocessor_params = dict(
-            fill_overflow=fill_overflow, highpass_freq=highpass_freq, lowpass_freq=lowpass_freq, filter_order=filter_order,
+            fill_overflow=fill_overflow, highpass_freq=highpass_freq, lowpass_freq=lowpass_freq,
+            notch_freq=notch_freq, common_ref_freq=common_ref_freq,
+            filter_order=filter_order,
             smooth_size=smooth_size, common_ref_removal=common_ref_removal,
             lostfront_chunksize=lostfront_chunksize, output_dtype=internal_dtype,
             signalpreprocessor_engine=signalpreprocessor_engine)
         SignalPreprocessor_class = signalpreprocessor.signalpreprocessor_engines[signalpreprocessor_engine]
         self.signalpreprocessor = SignalPreprocessor_class(self.dataio.sample_rate, self.nb_channel, chunksize, self.dataio.source_dtype)
-        
         
         self.peak_detector_params = dict(peak_sign=peak_sign, relative_threshold=relative_threshold, peak_span=peak_span)
         PeakDetector_class = peakdetector.peakdetector_engines[peakdetector_engine]
@@ -431,8 +434,9 @@ class CatalogueConstructor:
         params2['normalize'] = False
         self.signalpreprocessor.change_params(**params2)
         
-        iterator = self.dataio.iter_over_chunk(seg_num=seg_num, chan_grp=self.chan_grp, chunksize=self.chunksize, i_stop=length,
-                                                    signal_type='initial')
+        iterator = self.dataio.iter_over_chunk(
+            seg_num=seg_num, chan_grp=self.chan_grp, chunksize=self.chunksize, i_stop=length,
+            signal_type='initial')
         for pos, sigs_chunk in iterator:
             pos2, preprocessed_chunk = self.signalpreprocessor.process_data(pos, sigs_chunk)
             if preprocessed_chunk is not None:
@@ -443,7 +447,7 @@ class CatalogueConstructor:
         self.arrays.create_array('signals_mads', self.info['internal_dtype'], (self.nb_channel,), 'memmap')
         self.signals_medians[:] = signals_medians = np.median(filtered_sigs[:pos2], axis=0)
         self.signals_mads[:] = np.median(np.abs(filtered_sigs[:pos2]-signals_medians),axis=0)*1.4826
-        
+        # import pdb; pdb.set_trace()
         #detach filetered signals even if the file remains.
         self.arrays.detach_array(name)
         

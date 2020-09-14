@@ -58,7 +58,8 @@ class GlobalPCA:
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         self.pca = sklearn.decomposition.IncrementalPCA(n_components=n_components, **params)
         self.pca.fit(flatten_waveforms)
-        #In GlobalPCA all feature represent all channels
+        #  pdb.set_trace()
+        #  In GlobalPCA all feature represent all channels
         self.channel_to_features = np.ones((cc.nb_channel, self.n_components), dtype='bool')
 
     def transform(self, waveforms):
@@ -73,6 +74,8 @@ class GlobalUMAP:
             self, waveforms, catalogueconstructor=None,
             n_components=2, n_neighbors=5,
             min_dist=0.1, metric='euclidean',
+            set_op_mix_ratio=1., init='spectral',
+            n_epochs=500,
             **params):
         cc = catalogueconstructor
         self.n_components = n_components
@@ -80,7 +83,8 @@ class GlobalUMAP:
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         self.umap = umap.UMAP(
             n_components=n_components, n_neighbors=n_neighbors,
-            min_dist=min_dist, metric=metric,
+            min_dist=min_dist, metric=metric, init=init,
+            set_op_mix_ratio=set_op_mix_ratio, n_epochs=n_epochs,
             **params)
         try:
             self.umap.fit(flatten_waveforms)
@@ -99,6 +103,7 @@ class GlobalUMAP:
     def fit(self, waveforms, labels=None):
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         self.umap.fit(flatten_waveforms, y=labels)
+
 
 class PeakMaxOnChannel:
     def __init__(self, waveforms, catalogueconstructor=None, **params):
