@@ -148,25 +148,34 @@ class Peeler(OpenCL_Helper):
         self.shape_boundary_threshold = shape_boundary_threshold
         self.energy_reduction_threshold = energy_reduction_threshold
         #  RD 07/25/2019
-        projectorPath = os.path.join(
+        ccFolderName = os.path.join(
             self.dataio.dirname,
             'channel_group_{}'.format(catalogue['chan_grp']),
-            'catalogue_constructor', 'projector.pickle')
+            'catalogue_constructor')
+        projectorPath = os.path.join(
+            ccFolderName, 'projector.pickle')
         #  TODO: supervised projector
         supervisedProjectorPath = os.path.join(
-            self.dataio.dirname,
-            'channel_group_{}'.format(catalogue['chan_grp']),
-            'catalogue_constructor', 'supervised_projector.pickle')
+            ccFolderName, 'supervised_projector.pickle')
         if os.path.exists(supervisedProjectorPath):
             with open(supervisedProjectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
         elif os.path.exists(projectorPath):
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
+        if 'GlobalPUMAP' in self.projector.__repr__():
+            from umap.parametric_umap import ParametricUMAP, load_ParametricUMAP
+            import tensorflow as tf
+            tf.keras.backend.clear_session()
+            if os.path.exists(supervisedProjectorPath):
+                tfUmap = load_ParametricUMAP(
+                    os.path.join(ccFolderName, 'supervised-umap'), useConfigAndWeights=True)
+            else:
+                tfUmap = load_ParametricUMAP(
+                    os.path.join(ccFolderName, 'umap'), useConfigAndWeights=True)
+            self.projector.umap = tfUmap
         classifierPath = os.path.join(
-            self.dataio.dirname,
-            'channel_group_{}'.format(catalogue['chan_grp']),
-            'catalogue_constructor', 'classifier.pickle')
+            ccFolderName, 'classifier.pickle')
         if os.path.exists(classifierPath):
             with open(classifierPath, 'rb') as f:
                 self.classifier = pickle.load(f)['classifier']

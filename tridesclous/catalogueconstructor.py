@@ -447,7 +447,6 @@ class CatalogueConstructor:
         self.arrays.create_array('signals_mads', self.info['internal_dtype'], (self.nb_channel,), 'memmap')
         self.signals_medians[:] = signals_medians = np.median(filtered_sigs[:pos2], axis=0)
         self.signals_mads[:] = np.median(np.abs(filtered_sigs[:pos2]-signals_medians),axis=0)*1.4826
-        # import pdb; pdb.set_trace()
         #detach filetered signals even if the file remains.
         self.arrays.detach_array(name)
         
@@ -1460,17 +1459,40 @@ class CatalogueConstructor:
         if self.projector is None:
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
-        #
+            if 'GlobalPUMAP' in self.projector.__repr__():
+                from umap.parametric_umap import ParametricUMAP, load_ParametricUMAP
+                import tensorflow as tf
+                tf.keras.backend.clear_session()
+                tfUmap = load_ParametricUMAP(os.path.join(ccFolderName, 'umap'), useConfigAndWeights=True)
+                self.projector.umap = tfUmap
+                self.projector.umap.keras_fit_kwargs = {'verbose': 2}
         hasWvfMask = self.all_peaks['cluster_label'] > (-11)
         trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
-        self.projector.fit(self.some_waveforms, labels=trainingLabels)
+        refit_projector = True
+        if refit_projector:
+            self.projector.fit(self.some_waveforms, labels=trainingLabels)
         newFeatures = self.projector.transform(self.some_waveforms)
+        #
         supervisedProjectorPath = os.path.join(ccFolderName, 'supervised_projector.pickle')
+        if 'GlobalPUMAP' in self.projector.__repr__():
+            # shutil.copyfile(
+            #     os.path.join(ccFolderName, 'projector.pickle'),
+            #     os.path.join(ccFolderName, 'supervised_projector.pickle')
+            #     )
+            saveSubfolderPath = os.path.join(ccFolderName, 'supervised-umap')
+            if not os.path.exists(saveSubfolderPath):
+                os.makedirs(saveSubfolderPath)
+                self.projector.umap.save(saveSubfolderPath, useH5=False)
         with open(supervisedProjectorPath, 'wb') as f:
             pickle.dump({'projector': self.projector}, f)
         classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
         # we create an instance of Neighbours Classifier and fit the data.
-        clf = sklearn.neighbors.KNeighborsClassifier(n_neighbors=30, weights='distance')
+        if hasattr(self.projector, 'umap'):
+            nNeighbors = self.projector.umap.n_neighbors
+        else:
+            nNeighbors = 50
+        clf = sklearn.neighbors.KNeighborsClassifier(
+            n_neighbors=nNeighbors, weights='distance')
         clf.fit(newFeatures, y=trainingLabels)
         with open(classifierPath, 'wb') as f:
             pickle.dump({'classifier': clf}, f)

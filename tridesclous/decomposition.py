@@ -28,6 +28,8 @@ def project_waveforms(waveforms, method='pca', selection=None,  catalogueconstru
         projector = GlobalPCA(waveforms2, catalogueconstructor=catalogueconstructor, **params)
     elif method=='global_umap':
         projector = GlobalUMAP(waveforms2, catalogueconstructor=catalogueconstructor, **params)
+    elif method=='global_pumap':
+        projector = GlobalPUMAP(waveforms2, catalogueconstructor=catalogueconstructor, **params)
     elif method=='peak_max':
         projector = PeakMaxOnChannel(waveforms2, catalogueconstructor=catalogueconstructor, **params)
     elif method=='pca_by_channel':
@@ -58,7 +60,6 @@ class GlobalPCA:
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         self.pca = sklearn.decomposition.IncrementalPCA(n_components=n_components, **params)
         self.pca.fit(flatten_waveforms)
-        #  pdb.set_trace()
         #  In GlobalPCA all feature represent all channels
         self.channel_to_features = np.ones((cc.nb_channel, self.n_components), dtype='bool')
 
@@ -68,6 +69,7 @@ class GlobalPCA:
 
     def fit(self, waveforms, labels=None):
         return
+
 
 class GlobalUMAP:
     def __init__(
@@ -86,23 +88,62 @@ class GlobalUMAP:
             min_dist=min_dist, metric=metric, init=init,
             set_op_mix_ratio=set_op_mix_ratio, n_epochs=n_epochs,
             **params)
-        try:
-            self.umap.fit(flatten_waveforms)
-        except:
-            print('###########################################################')
-            print(cc)
-            traceback.print_exc()
-            print('###########################################################')
+        self.umap.fit(flatten_waveforms)
+        # try:
+        #     self.umap.fit(flatten_waveforms)
+        # except:
+        #     print('###########################################################')
+        #     print(cc)
+        #     traceback.print_exc()
+        #     print('###########################################################')
         #In GlobalPCA all feature represent all channels
         self.channel_to_features = np.ones((cc.nb_channel, self.n_components), dtype='bool')
     
     def transform(self, waveforms):
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         return self.umap.transform(flatten_waveforms)
-    
+        
     def fit(self, waveforms, labels=None):
         flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
         self.umap.fit(flatten_waveforms, y=labels)
+
+
+class GlobalPUMAP:
+    def __init__(
+            self, waveforms, catalogueconstructor=None,
+            n_components=2, n_neighbors=5,
+            min_dist=0.1, metric='euclidean',
+            set_op_mix_ratio=1., init='spectral',
+            n_epochs=500,
+            **params):
+        cc = catalogueconstructor
+        self.n_components = n_components
+        self.waveforms = waveforms
+        flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
+        ##### parametric umap
+        self.data_min = flatten_waveforms.min()
+        self.data_range = flatten_waveforms.max() - self.data_min
+        scaled_waveforms = (flatten_waveforms - self.data_min) / self.data_range
+        self.umap = umap.parametric_umap.ParametricUMAP(
+            n_components=n_components, n_neighbors=n_neighbors,
+            min_dist=min_dist, metric=metric, init=init,
+            set_op_mix_ratio=set_op_mix_ratio, n_epochs=n_epochs,
+            **params)
+        #
+        self.umap.fit(scaled_waveforms)
+        self.channel_to_features = np.ones((cc.nb_channel, self.n_components), dtype='bool')
+    
+    def transform(self, waveforms):
+        flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
+        scaled_waveforms = (flatten_waveforms - self.data_min) / self.data_range
+        return self.umap.transform(scaled_waveforms)
+    
+    def fit(self, waveforms, labels=None):
+        flatten_waveforms = waveforms.reshape(waveforms.shape[0], -1)
+        self.data_min = flatten_waveforms.min()
+        self.data_range = flatten_waveforms.max() - self.data_min
+        scaled_waveforms = (flatten_waveforms - self.data_min) / self.data_range
+        self.umap.fit(scaled_waveforms, y=labels)
 
 
 class PeakMaxOnChannel:
