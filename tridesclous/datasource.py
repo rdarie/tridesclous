@@ -232,8 +232,9 @@ class NeoRawIOAggregator(DataSourceBase):
     
     def get_signals_chunk(self, seg_num=0, i_start=None, i_stop=None):
         rawio, s = self.segments[seg_num]
-        return rawio.get_analogsignal_chunk(block_index=0, seg_index=s, 
-                        i_start=i_start, i_stop=i_stop)
+        return rawio.get_analogsignal_chunk(
+            block_index=0, seg_index=s, 
+            i_start=i_start, i_stop=i_stop)
 
 #Construct the list with taking local class with hooks dict
 rawiolist = []

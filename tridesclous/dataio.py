@@ -97,7 +97,7 @@ class DataIO:
         
         return True
     
-    def __init__(self, dirname='test'):
+    def __init__(self, dirname='test', altInfo=None):
         self.dirname = dirname
         if not os.path.exists(dirname):
             os.mkdir(dirname)
@@ -111,6 +111,8 @@ class DataIO:
         else:
             with open(self.info_filename, 'r', encoding='utf8') as f:
                 self.info = json.load(f)
+                if altInfo is not None:
+                    self.info.update(altInfo)
             #~ print('*'*50)
             #~ print(self.info_filename)
             #~ print(self.info)
@@ -404,7 +406,7 @@ class DataIO:
             
                 for name in ['processed_signals', 'spikes']:
                     self.arrays[chan_grp][i].load_if_exists(name)
-    
+
     def get_segment_length(self, seg_num):
         """
         Segment length (in sample) for a given segment index
@@ -449,6 +451,7 @@ class DataIO:
         
         if signal_type=='initial':
             data = self.datasource.get_signals_chunk(seg_num=seg_num, i_start=i_start, i_stop=i_stop)
+            # import pdb; pdb.set_trace()
             data = data[:, channels]
         elif signal_type=='processed':
             data = self.arrays[chan_grp][seg_num].get('processed_signals')[i_start:i_stop, :]
@@ -546,7 +549,11 @@ class DataIO:
             return
         return spikes[i_start:i_stop]
     
-    def get_some_waveforms(self, seg_num=0, chan_grp=0, spike_indexes=None, n_left=None, n_right=None):
+    def get_some_waveforms(
+            self, seg_num=0, chan_grp=0,
+            spike_indexes=None,
+            n_left=None, n_right=None,
+            signal_type='processed'):
         """
         Exctract some waveforms given spike_indexes
         """
@@ -557,7 +564,7 @@ class DataIO:
             i_start = spike_index + n_left
             i_stop = spike_index + n_right
             wf[i, :, :] = self.get_signals_chunk(seg_num=seg_num, chan_grp=chan_grp, 
-                        i_start=i_start, i_stop=i_stop, signal_type='processed')
+                        i_start=i_start, i_stop=i_stop, signal_type=signal_type)
         return wf
         
     def save_catalogue(self, catalogue, name='initial'):

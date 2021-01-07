@@ -276,7 +276,13 @@ class ArrayCollection:
             self.load_if_exists(k)
     
     def get(self, name):
-        assert name in self._array_attr
+        # if not (name in self._array_attr):
+        #     import pdb;
+        #     pdb.set_trace()
+        try:
+            assert name in self._array_attr
+        except Exception:
+            print('{} not in self._array_attr!!'.format(name))
         return self._array[name]
     
     def keys(self):

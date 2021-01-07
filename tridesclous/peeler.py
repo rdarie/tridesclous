@@ -9,7 +9,7 @@ import os
 import json
 from collections import OrderedDict, namedtuple
 import time
-
+import pdb
 import numpy as np
 import scipy.signal
 from scipy.spatial.distance import minkowski, chebyshev
@@ -91,24 +91,24 @@ class Peeler(OpenCL_Helper):
         
         return t
 
-    def change_params(self, catalogue=None, chunksize=1024, 
-                                        internal_dtype='float32', 
-                                        use_sparse_template=False,
-                                        sparse_threshold_mad=1.5,
-                                        shape_distance_threshold=2,
-                                        shape_boundary_threshold=3,
-                                        energy_reduction_threshold=15,
-                                        confidence_threshold=0.6,
-                                        debugging=False,
-                                        use_opencl_with_sparse=False,
-                                        use_pythran_with_sparse=False,
-                                        cl_platform_index=None,
-                                        cl_device_index=None,
-                                        ):
+    def change_params(
+            self, catalogue=None, chunksize=1024,
+            internal_dtype='float32',
+            use_sparse_template=False,
+            sparse_threshold_mad=1.5,
+            shape_distance_threshold=2,
+            shape_boundary_threshold=4,
+            energy_reduction_threshold=0,
+            confidence_threshold=0.6,
+            n_max_passes=3,
+            debugging=False,
+            use_opencl_with_sparse=False,
+            use_pythran_with_sparse=False,
+            cl_platform_index=None,
+            cl_device_index=None,
+            ):
         """
         Set parameters for the Peeler.
-        
-        
         Parameters
         ----------
         catalogue: the catalogue (a dict)
@@ -148,6 +148,8 @@ class Peeler(OpenCL_Helper):
         self.shape_boundary_threshold = shape_boundary_threshold
         self.energy_reduction_threshold = energy_reduction_threshold
         #  RD 07/25/2019
+        self.n_max_passes = n_max_passes
+        #  RD 01/06/2021
         ccFolderName = os.path.join(
             self.dataio.dirname,
             'channel_group_{}'.format(catalogue['chan_grp']),
@@ -200,8 +202,10 @@ class Peeler(OpenCL_Helper):
                 window1[:int(-self.catalogue['n_left'])],
                 window2[int(self.catalogue['n_right']) + 1:]),
             axis=-1)
-        #  discount edges a lot
-        window[window < 0.5] = 0.1
+        discountEdges = False
+        if discountEdges:
+            #  discount edges a lot
+            window[window < 0.5] = 0.1
         #  normalize to sum 1, so that the distance is an average
         #  deviation
         self.distance_window = (window) / np.sum(window)
@@ -215,6 +219,8 @@ class Peeler(OpenCL_Helper):
             {'energy_reductions': [[] for i in range(nClusters)]})
         self.catalogue.update(
             {'feat_distances': [[] for i in range(nClusters)]})
+        self.catalogue.update(
+            {'resid_energies': [[] for i in range(nClusters)]})
         self.catalogue.update(
             {'tallyPlots': 0})
         # end RD Mods
@@ -334,11 +340,12 @@ class Peeler(OpenCL_Helper):
         #~ t1 = time.perf_counter()
         good_spikes = []
         all_ready_tested = []
+        passes_counter = 0
         while True:
             #detect peaks
-            t3 = time.perf_counter()
+            # t3 = time.perf_counter()
             local_peaks = detect_peaks_in_chunk(self.fifo_residuals, self.n_span, self.relative_threshold, self.peak_sign)
-            t4 = time.perf_counter()
+            # t4 = time.perf_counter()
             #~ print('self.fifo_residuals median', np.median(self.fifo_residuals, axis=0))
             #~ print('  detect_peaks_in_chunk', (t4-t3)*1000.)
             
@@ -348,9 +355,14 @@ class Peeler(OpenCL_Helper):
                 local_peaks_to_check = local_peaks
             
             n_ok = 0
+            prints_counter = 0
             for i, local_peak in enumerate(local_peaks_to_check):
                 #~ print('    local_peak', local_peak, 'i', i)
                 #~ t3 = time.perf_counter()
+                pctDone = np.floor(100 * i/local_peaks_to_check.shape[0])
+                if pctDone >= prints_counter:
+                    print('     Peeler, pass {}: {} pct. done...'.format(passes_counter+1, pctDone))
+                    prints_counter += 20
                 spike = self.classify_and_align_one_spike(local_peak, self.fifo_residuals, self.catalogue)
                 #~ t4 = time.perf_counter()
                 #~ print('    classify_and_align_one_spike', (t4-t3)*1000.)
@@ -363,7 +375,8 @@ class Peeler(OpenCL_Helper):
                     self.fifo_residuals -= prediction
                     spikes['index'] += shift
                     good_spikes.append(spikes)
-                    n_ok += 1
+                    if passes_counter < self.n_max_passes - 1:
+                        n_ok += 1
                     #~ t4 = time.perf_counter()
                     #~ print('    make_prediction_signals and sub', (t4-t3)*1000.)
                     
@@ -372,7 +385,9 @@ class Peeler(OpenCL_Helper):
                     #~ print('    all_ready_tested new deal', all_ready_tested)
                 else:
                     all_ready_tested.append(local_peak)
-            
+            #
+            passes_counter += 1
+            #
             if n_ok==0:
                 # no peak can be labeled
                 # reserve bad spikes on the right limit for next time
@@ -475,12 +490,15 @@ class Peeler(OpenCL_Helper):
         self.dataio.reset_processed_signals(seg_num=seg_num, chan_grp=chan_grp, dtype=self.internal_dtype)
         self.dataio.reset_spikes(seg_num=seg_num, chan_grp=chan_grp, dtype=_dtype_spike)
 
-        iterator = self.dataio.iter_over_chunk(seg_num=seg_num, chan_grp=chan_grp, chunksize=self.chunksize, 
-                                                    i_stop=length, signal_type='initial')
+        iterator = self.dataio.iter_over_chunk(
+            seg_num=seg_num, chan_grp=chan_grp, chunksize=self.chunksize, 
+            i_stop=length, signal_type='initial')
         if progressbar:
             iterator = tqdm(iterable=iterator, total=length//self.chunksize)
         for pos, sigs_chunk in iterator:
-            
+            if not progressbar:
+                pctDone = np.floor(100 * pos/length)
+                print('Peeler: on chunk {} of {} ({} pct.)'.format(pos//self.chunksize, length//self.chunksize, pctDone))
             sig_index, preprocessed_chunk, total_spike, spikes = self.process_one_chunk(pos, sigs_chunk)
             
             if sig_index<=0:
@@ -505,9 +523,9 @@ class Peeler(OpenCL_Helper):
         self.dataio.flush_processed_signals(seg_num=seg_num, chan_grp=chan_grp)
         self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
         if self.debugging:
-            sns.set_style('white')
-            fig, ax = plt.subplots(1, 3)
-            fig.set_size_inches(12, 4)
+            sns.set_style('whitegrid')
+            fig, ax = plt.subplots(1, 4)
+            fig.set_size_inches(16, 4)
             chanTitle = 'Chan_grp {}'.format(self.catalogue['chan_grp'])
             # print(chanTitle)
             for idx, distList in enumerate(self.catalogue['template_distances']):
@@ -550,6 +568,21 @@ class Peeler(OpenCL_Helper):
                     print(summaryText)
                     ax[2].set_xlabel('Feature distances from template')
                     ax[2].set_ylabel('Count (normalized)')
+                    #
+                    theseWfEns = np.array(self.catalogue['resid_energies'][idx])
+                    this95 = (
+                        np.nanmean(theseWfEns) +
+                        2 * np.nanstd(theseWfEns))
+                    summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseWfEns))
+                    sns.distplot(
+                        theseFeat, ax=ax[3],
+                        label=summaryText,
+                        # bins=np.arange(0, 5, 0.2)
+                        )
+                    # ax[2].set_xlim([0, 5])
+                    print(summaryText)
+                    ax[3].set_xlabel('Squared sum of residual waveform')
+                    ax[3].set_ylabel('Count (normalized)')
                 except Exception:
                     print('Error in peeler.run_offline_loop_one_segment( diagnostic plots')
             plt.legend()
@@ -607,7 +640,6 @@ class Peeler(OpenCL_Helper):
                 jitter = 0
                 feature_distance = 0
             else:
-                
                 #~ t1 = time.perf_counter()
                 label, jitter, feature_distance = self.estimate_one_jitter(waveform)
                 #~ t2 = time.perf_counter()
@@ -702,8 +734,6 @@ class Peeler(OpenCL_Helper):
                                 catalogue['centers0'],  catalogue['sparse_mask'])
             cluster_idx = np.argmin(s)
         else:
-            orig_wf = np.pad(waveform, ((2,2), (0,0)), 'edge')
-            feat = self.projector.transform(orig_wf[np.newaxis, :, :])
             # replace by this (indentique but faster, a but)
             #~ t1 = time.perf_counter()
             #d = catalogue['feature_medians'] - temp_feat
@@ -720,16 +750,24 @@ class Peeler(OpenCL_Helper):
             if self.classifier is not None:
                 confidence = np.max(self.classifier.predict_proba(feat)[0])
                 temp_k = self.classifier.predict(feat)[0]
-                if confidence > self.confidence_threshold:
+                # RD 2020-11-11 disabling
+                if (confidence > self.confidence_threshold):
                     if (temp_k == -1):
+                        # print('Found waveform, classifying as noise')
                         return LABEL_UNCLASSIFIED, 0., 0.
                     elif (temp_k == -9):
                         return LABEL_ALIEN, 0., 0.
                     else:
                         k = temp_k
                         if not len(np.flatnonzero(catalogue['cluster_labels'] == k)):
-                            import pdb; pdb.set_trace()
+                            print('ERROR: not len(np.flatnonzero(catalogue[cluster_labels] == k))')
+                            pdb.set_trace()
                         cluster_idx = np.flatnonzero(catalogue['cluster_labels'] == k)[0]
+            else:
+                # use k that minimizes squared distance
+                pass
+            orig_wf = np.pad(waveform, ((2,2), (0,0)), 'edge')
+            feat = self.projector.transform(orig_wf[np.newaxis, :, :])
         
         #~ print('cluster_idx', cluster_idx, 'k', k, 'chan', chan)
         chan = catalogue['max_on_channel'][cluster_idx]
@@ -748,7 +786,7 @@ class Peeler(OpenCL_Helper):
         #~ wf1_norm2 = wf1.dot(wf1)
         #~ wf2_norm2 = wf2.dot(wf2)
         #~ wf1_dot_wf2 = wf1.dot(wf2)
-        wf1_norm2= catalogue['wf1_norm2'][cluster_idx]
+        wf1_norm2 = catalogue['wf1_norm2'][cluster_idx]
         wf2_norm2 = catalogue['wf2_norm2'][cluster_idx]
         wf1_dot_wf2 = catalogue['wf1_dot_wf2'][cluster_idx]
         
@@ -779,7 +817,7 @@ class Peeler(OpenCL_Helper):
         #~ print(np.sum(wf**2) > np.sum((wf-(wf0+jitter1*wf1+jitter1**2/2*wf2))**2))
         #~ return k, jitter1
         pred_wf = (wf0+jitter1*wf1+jitter1**2/2*wf2)
-        #   
+        #  
         #  norm_factor = np.max(np.abs(pred_wf))
         norm_factor = 1
         wf_resid = (wf-pred_wf)
@@ -801,55 +839,90 @@ class Peeler(OpenCL_Helper):
                 normal_feat,
                 np.zeros_like(normal_feat),
                 p=self.distance_order, w=self.feature_window)
-        except:
+        except Exception:
             print('on chan_grp {}'.format(catalogue['chan_grp']))
             import traceback; traceback.print_exc()
+            pdb.set_trace()
         # criteria
-        energy_reduction = (np.sum(wf**2) - np.sum(wf_resid**2)) / wf.shape[0]
-        minimizes_energy = energy_reduction > 0
-        shape_criterion = (pred_distance < self.shape_distance_threshold)
-        shape_excluder = (pred_distance > self.shape_distance_threshold)
-        feat_criterion = (feat_distance < self.shape_distance_threshold)
-        feat_excluder = (feat_distance > self.shape_distance_threshold)
-        exclusion_criterion = (not (shape_excluder or feat_excluder))
+        # energy_reduction = (np.sum(wf**2) - np.sum(wf_resid**2)) / np.sum(wf_resid**2)
+        #
+        resid_energy = np.sqrt(np.sum(wf_resid**2) / wf_resid.shape[0])
+        wf_energy = np.sqrt(np.sum(wf**2) / wf.shape[0])
+        energy_reduction = wf_energy - resid_energy
+        #
+        # minimizes_energy = energy_reduction > 0
+        if self.energy_reduction_threshold is not None:
+            minimizes_energy = energy_reduction > self.energy_reduction_threshold # minimizes energy *enough*
+        else:
+            minimizes_energy = True
+        #
+        if self.shape_distance_threshold is not None:
+            shape_criterion = (pred_distance < self.shape_distance_threshold) # keep if
+            shape_excluder = (pred_distance > self.shape_distance_threshold) # exclude if
+            #
+            feat_criterion = (feat_distance < self.shape_distance_threshold)
+            feat_excluder = (feat_distance > self.shape_distance_threshold)
+        else:
+            shape_criterion = True # keep if
+            shape_excluder = False # exclude if
+            feat_criterion = True
+            feat_excluder = False
+        # 
+        passes_exclusion_criterion = (not (shape_excluder or feat_excluder))
         if self.classifier is not None:
-            inclusion_criterion = (
+            passes_inclusion_criterion = (
                 minimizes_energy &
                 (confidence > self.confidence_threshold) &
-                exclusion_criterion
+                passes_exclusion_criterion
                 )
         else:
-            inclusion_criterion = (
+            passes_inclusion_criterion = (
                 minimizes_energy &
-                (shape_criterion or feat_criterion) &
-                exclusion_criterion
+                # (shape_criterion or feat_criterion) &  # satisifies at least one condition
+                passes_exclusion_criterion  # is not excluded for any reason
                 )
         # log quality measurements
-        if (inclusion_criterion):
+        if (passes_inclusion_criterion):
             self.catalogue['template_distances'][cluster_idx].append(pred_distance)
             self.catalogue['energy_reductions'][cluster_idx].append(energy_reduction)
+            self.catalogue['resid_energies'][cluster_idx].append(resid_energy)
             self.catalogue['feat_distances'][cluster_idx].append(feat_distance)
         if self.debugging:
             # show near exclusions
-            near_miss = pred_distance > (self.shape_distance_threshold * .9)
+            if self.shape_distance_threshold is not None:
+                near_miss = pred_distance > (self.shape_distance_threshold * .9)
+            else:
+                near_miss = False
             if  (
                     (near_miss) and
                     (self.catalogue['tallyPlots'] < 100) and
-                    (inclusion_criterion)):
+                    (passes_inclusion_criterion)):
                 #
                 fig, ax = plt.subplots(2, 1)
                 fig.set_size_inches(4, 8)
-                ax[0].plot(wf / norm_factor, label='waveform, cluster {}'.format(k))
-                ax[0].plot(pred_wf / norm_factor, label='prediction')
+                plotX = (3e1 ** -1) * np.arange(0, wf.shape[0])
+                ax[0].plot(plotX, wf / norm_factor, label='waveform, cluster {}'.format(k))
+                ax[0].plot(plotX, pred_wf / norm_factor, label='template waveform')
                 ax[0].autoscale(enable=False)
-                ax[0].plot((pred_wf + 3) / norm_factor, 'k--')
-                ax[0].plot((pred_wf - 3) / norm_factor, 'k--')
+                # ax[0].plot((pred_wf + 3) / norm_factor, 'k--')
+                # ax[0].plot((pred_wf - 3) / norm_factor, 'k--')
+                ax[0].fill_between(
+                    plotX,
+                    (pred_wf + self.shape_boundary_threshold) / norm_factor,
+                    (pred_wf - self.shape_boundary_threshold) / norm_factor,
+                    color='tab:orange', alpha=0.3)
+                ax[0].set_xlim((np.min(plotX), np.max(plotX)))
+                ax[0].set_ylim((
+                    min(np.min(wf / norm_factor), np.min(pred_wf / norm_factor)) - 1,
+                    max(np.max(wf / norm_factor), np.max(pred_wf / norm_factor)) + 1,
+                ))
                 #
+                statsMessage = 'shape distance: {:.2f}\n energy reduction: {:.2f}'.format(
+                    pred_distance, energy_reduction)
                 ax[0].text(
-                    0, 0,
-                    'shape distance: {:.2f}'.format(pred_distance),
+                    0, 0, statsMessage,
                     transform=ax[0].transAxes)
-                ax[0].legend()
+                ax[0].legend(loc='upper right')
                 #   
                 #  twAx = ax[1].twinx()
                 #  ax[1].plot(self.distance_window, label='distance window')
@@ -865,13 +938,15 @@ class Peeler(OpenCL_Helper):
                 #  ax[2].legend()
                 ax[1].plot(np.squeeze(normal_feat), label='feature, cluster {}'.format(k))
                 #  ax[1].plot(np.squeeze(pred_feat), label='prediction')
+                ax1Caption = 'feat_distance = {:.2f} < {} (Include? {})'.format(
+                    feat_distance, self.shape_distance_threshold,
+                    passes_inclusion_criterion)
+                if self.classifier is not None:
+                    ax1Caption += '\nClassifier confidence = {:.2f} (must be > {})'.format(
+                        confidence, self.confidence_threshold)
                 ax[1].text(
-                    0, 0,
-                    '{:.2f} < {} ({})'.format(
-                        feat_distance, self.shape_distance_threshold,
-                        inclusion_criterion
-                    ), transform=ax[1].transAxes)
-                ax[1].legend()
+                    0, 0, ax1Caption, transform=ax[1].transAxes)
+                ax[1].legend(loc='upper right')
                 plt.savefig(
                     os.path.join(
                         self.dataio.dirname,
@@ -881,7 +956,7 @@ class Peeler(OpenCL_Helper):
                 self.catalogue['tallyPlots'] += 1
                 plt.close()
                 #
-        if inclusion_criterion:
+        if passes_inclusion_criterion:
             #prediction should be smaller than original (which have noise)
             return k, jitter1, feat_distance
         else:

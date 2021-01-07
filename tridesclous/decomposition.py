@@ -53,7 +53,9 @@ def project_waveforms(waveforms, method='pca', selection=None,  catalogueconstru
 
 
 class GlobalPCA:
-    def __init__(self, waveforms, catalogueconstructor=None, n_components=5, **params):
+    def __init__(
+            self, waveforms, catalogueconstructor=None,
+            n_components=5, **params):
         cc = catalogueconstructor
         self.n_components = n_components
         self.waveforms = waveforms

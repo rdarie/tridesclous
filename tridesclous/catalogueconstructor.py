@@ -15,7 +15,7 @@ import dill as pickle
 import itertools
 import datetime
 import shutil
-
+import pdb
 import numpy as np
 import scipy.signal
 import scipy.interpolate
@@ -177,7 +177,9 @@ class CatalogueConstructor:
       * cluster_ratio_similarity (C, C) float32
 
     """.format(_dtype_peak, _dtype_cluster)
-    def __init__(self, dataio, chan_grp=None, name='catalogue_constructor'):
+    def __init__(
+            self, dataio, chan_grp=None, name='catalogue_constructor',
+            make_classifier=False, classifier_opts=None):
         """
         Parameters
         ----------
@@ -213,46 +215,36 @@ class CatalogueConstructor:
         else:
             with open(self.info_filename, 'r', encoding='utf8') as f:
                 self.info = json.load(f)
-        
-        
         for name in _persitent_arrays:
             # this set attribute to class if exsits
             self.arrays.load_if_exists(name)
-            
         if self.all_peaks is not None:
-            self.memory_mode='memmap'
-        
-        
-        
+            self.memory_mode = 'memmap'
         self.projector = None
-    
+        self.make_classifier = make_classifier
+        self.classifier_opts = classifier_opts
+
     def flush_info(self):
         """ Flush info (mainly parameters) to json files.
         """
         with open(self.info_filename, 'w', encoding='utf8') as f:
             json.dump(self.info, f, indent=4)
-    
+
     def __repr__(self):
         t = "CatalogueConstructor\n"
         t += '  ' + self.dataio.channel_group_label(chan_grp=self.chan_grp) + '\n'
         if self.all_peaks is None:
             t += '  Signal pre-processing not done yet'
             return t
-        
         #~ t += "  nb_peak: {}\n".format(self.nb_peak)
         nb_peak_by_segment = [ np.sum(self.all_peaks['segment']==i)  for i in range(self.dataio.nb_segment)]
         t += '  nb_peak_by_segment: '+', '.join('{}'.format(n) for n in nb_peak_by_segment)+'\n'
-
         if self.some_waveforms is not None:
             t += '  some_waveforms.shape: {}\n'.format(self.some_waveforms.shape)
-            
         if self.some_features is not None:
             t += '  some_features.shape: {}\n'.format(self.some_features.shape)
-        
         if hasattr(self, 'cluster_labels'):
             t += '  cluster_labels {}\n'.format(self.cluster_labels)
-        
-        
         return t
 
     @property
@@ -641,7 +633,8 @@ class CatalogueConstructor:
             some_peaks_index = index.copy()
         else:
             if mode=='rand' and self.nb_peak>nb_max:
-                some_peaks_index = np.random.choice(self.nb_peak, size=nb_max).astype('int64')
+                some_peaks_index = np.random.choice(
+                    self.nb_peak, size=nb_max, replace=False).astype('int64')
             elif mode=='rand' and self.nb_peak<=nb_max:
                 some_peaks_index = np.arange(self.nb_peak, dtype='int64')
             elif mode=='all':
@@ -845,7 +838,7 @@ class CatalogueConstructor:
                 possibles[peak['index']+n_left-n_right:peak['index']+n_right-n_left]
             possible_indexes, = np.nonzero(possibles)
             noise_index = np.zeros(n_by_seg, dtype=_dtype_peak)
-            noise_index['index'] = possible_indexes[np.sort(np.random.choice(possible_indexes.size, size=n_by_seg))]
+            noise_index['index'] = possible_indexes[np.sort(np.random.choice(possible_indexes.size, size=n_by_seg, replace=False))]
             noise_index['cluster_label'] = labelcodes.LABEL_NOISE
             noise_index['segment'][:] = seg_num
             some_noise_index.append(noise_index)
@@ -881,8 +874,9 @@ class CatalogueConstructor:
         
         #~ wf = self.some_waveforms.reshape(self.some_waveforms.shape[0], -1)
         #~ params['n_components'] = n_components
-        features, channel_to_features, self.projector = decomposition.project_waveforms(self.some_waveforms, method=method, selection=None,
-                    catalogueconstructor=self, **params)
+        features, channel_to_features, self.projector = decomposition.project_waveforms(
+            self.some_waveforms, method=method, selection=None,
+            catalogueconstructor=self, **params)
         
         if features is None:
             for name in ['some_features', 'channel_to_features', 'some_noise_features']:
@@ -1181,6 +1175,17 @@ class CatalogueConstructor:
         for k in to_remove:
             self.remove_one_cluster(k)
 
+    def move_small_cluster_to_trash(self, n=10):
+        to_remove = []
+        if isinstance(self.cluster_labels, int):
+            iterateOver = [self.cluster_labels]
+        else:
+            iterateOver = list(self.cluster_labels)
+        for k in iterateOver:
+            mask = self.all_peaks['cluster_label']==k
+            if np.sum(mask)<=n:
+                self.move_cluster_to_trash(k)
+
     def compute_spike_waveforms_similarity(self, method='cosine_similarity', size_max = 1e7):
         """This compute the similarity spike by spike.
         """
@@ -1412,7 +1417,8 @@ class CatalogueConstructor:
         #~ self._reset_metrics()
         self._reset_arrays(_persistent_metrics)
 
-    def make_catalogue(self):
+    def make_catalogue(
+            self, refit_projector=True):
         #TODO: offer possibility to resample some waveforms or choose the number
         
         t1 = time.perf_counter()
@@ -1463,12 +1469,24 @@ class CatalogueConstructor:
                 from umap.parametric_umap import ParametricUMAP, load_ParametricUMAP
                 import tensorflow as tf
                 tf.keras.backend.clear_session()
-                tfUmap = load_ParametricUMAP(os.path.join(ccFolderName, 'umap'), useConfigAndWeights=True)
+                tfUmap = load_ParametricUMAP(
+                    os.path.join(ccFolderName, 'umap'),
+                    useConfigAndWeights=True)
                 self.projector.umap = tfUmap
-                self.projector.umap.keras_fit_kwargs = {'verbose': 2}
+                callbacks = [
+                    tf.keras.callbacks.EarlyStopping(
+                        # Stop training when `loss` is no longer improving
+                        monitor="loss",
+                        # "no longer improving" being defined as "no better than 1e-2 less"
+                        min_delta=5e-3,
+                        # "no longer improving" being further defined as "for at least 2 epochs"
+                        patience=2,
+                        verbose=1,
+                    )
+                ]
+                self.projector.umap.keras_fit_kwargs = {'verbose': 2, 'callbacks': callbacks}
         hasWvfMask = self.all_peaks['cluster_label'] > (-11)
         trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
-        refit_projector = True
         if refit_projector:
             self.projector.fit(self.some_waveforms, labels=trainingLabels)
         newFeatures = self.projector.transform(self.some_waveforms)
@@ -1485,17 +1503,22 @@ class CatalogueConstructor:
                 self.projector.umap.save(saveSubfolderPath, useH5=False)
         with open(supervisedProjectorPath, 'wb') as f:
             pickle.dump({'projector': self.projector}, f)
-        classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
-        # we create an instance of Neighbours Classifier and fit the data.
-        if hasattr(self.projector, 'umap'):
-            nNeighbors = self.projector.umap.n_neighbors
-        else:
-            nNeighbors = 50
-        clf = sklearn.neighbors.KNeighborsClassifier(
-            n_neighbors=nNeighbors, weights='distance')
-        clf.fit(newFeatures, y=trainingLabels)
-        with open(classifierPath, 'wb') as f:
-            pickle.dump({'classifier': clf}, f)
+        if self.make_classifier:
+            classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
+            # we create an instance of Neighbours Classifier and fit the data.
+            if hasattr(self.projector, 'umap'):
+                nNeighbors = self.projector.umap.n_neighbors
+            else:
+                nNeighbors = 50
+            if self.classifier_opts is None:
+                clf = sklearn.neighbors.KNeighborsClassifier(
+                    n_neighbors=nNeighbors, weights='distance')
+            else:
+                pass
+                # TODO: implement custom classifier training
+            clf.fit(newFeatures, y=trainingLabels)
+            with open(classifierPath, 'wb') as f:
+                pickle.dump({'classifier': clf}, f)
         #~ print('peak_width', self.catalogue['peak_width'])
         self.catalogue['label_to_index'] = {}
         for i, k in enumerate(cluster_labels):
@@ -1549,7 +1572,6 @@ class CatalogueConstructor:
             feature_medians[i, :] = theseFeatMedians
             feature_mads[i, :] = theseFeatMads
             # end RD mods
-            
         #find max  channel for each cluster for peak alignement
         self.catalogue['max_on_channel'] = np.zeros_like(self.catalogue['cluster_labels'])
         for i, k in enumerate(cluster_labels):
