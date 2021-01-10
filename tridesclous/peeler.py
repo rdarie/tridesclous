@@ -143,10 +143,19 @@ class Peeler(OpenCL_Helper):
 
         #  RD 03/20/2019
         self.distance_order = 1
-        self.shape_distance_threshold = shape_distance_threshold
+        if shape_distance_threshold is None:
+            self.shape_distance_threshold = 5
+        else:
+            self.shape_distance_threshold = shape_distance_threshold
         #  RD 05/15/2019
-        self.shape_boundary_threshold = shape_boundary_threshold
-        self.energy_reduction_threshold = energy_reduction_threshold
+        if shape_boundary_threshold is None:
+            self.shape_boundary_threshold = 10
+        else:
+            self.shape_boundary_threshold = shape_boundary_threshold
+        if energy_reduction_threshold is None:
+            self.energy_reduction_threshold = 0
+        else:
+            self.energy_reduction_threshold = energy_reduction_threshold
         #  RD 07/25/2019
         self.n_max_passes = n_max_passes
         #  RD 01/06/2021
@@ -181,10 +190,13 @@ class Peeler(OpenCL_Helper):
         if os.path.exists(classifierPath):
             with open(classifierPath, 'rb') as f:
                 self.classifier = pickle.load(f)['classifier']
-            self.confidence_threshold = confidence_threshold
+            if confidence_threshold is not None:
+                self.confidence_threshold = confidence_threshold
+            else:
+                self.confidence_threshold = 0
         else:
             self.classifier = None
-            self.confidence_threshold = None
+            self.confidence_threshold = 0
         #  evr = self.projector.explained_variance_ratio_
         #  cum_evr = np.cumsum(evr)
         #  self.variance_cutoff = 0.75
@@ -221,6 +233,8 @@ class Peeler(OpenCL_Helper):
             {'feat_distances': [[] for i in range(nClusters)]})
         self.catalogue.update(
             {'resid_energies': [[] for i in range(nClusters)]})
+        self.catalogue.update(
+            {'classifier_confidences': [[] for i in range(nClusters)]})
         self.catalogue.update(
             {'tallyPlots': 0})
         # end RD Mods
@@ -524,8 +538,8 @@ class Peeler(OpenCL_Helper):
         self.dataio.flush_spikes(seg_num=seg_num, chan_grp=chan_grp)
         if self.debugging:
             sns.set_style('whitegrid')
-            fig, ax = plt.subplots(1, 4)
-            fig.set_size_inches(16, 4)
+            fig, ax = plt.subplots(1, 5)
+            fig.set_size_inches(20, 4)
             chanTitle = 'Chan_grp {}'.format(self.catalogue['chan_grp'])
             # print(chanTitle)
             for idx, distList in enumerate(self.catalogue['template_distances']):
@@ -541,7 +555,7 @@ class Peeler(OpenCL_Helper):
                     ax[0].set_xlim([0, 5])
                     ax[0].set_xlabel('Weighted distance to template')
                     ax[0].set_ylabel('Count (normalized)')
-                    #  print(summaryText)
+                    ##########
                     theseEn = np.array(self.catalogue['energy_reductions'][idx])
                     this95 = (
                         np.nanmean(theseEn) +
@@ -554,6 +568,7 @@ class Peeler(OpenCL_Helper):
                     #  print(summaryText)
                     ax[1].set_xlabel('energy reduction')
                     ax[1].set_ylabel('Count (normalized)')
+                    ######################
                     theseFeat = np.array(self.catalogue['feat_distances'][idx])
                     this95 = (
                         np.nanmean(theseFeat) +
@@ -569,20 +584,34 @@ class Peeler(OpenCL_Helper):
                     ax[2].set_xlabel('Feature distances from template')
                     ax[2].set_ylabel('Count (normalized)')
                     #
+                    ##############
                     theseWfEns = np.array(self.catalogue['resid_energies'][idx])
                     this95 = (
                         np.nanmean(theseWfEns) +
                         2 * np.nanstd(theseWfEns))
                     summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseWfEns))
                     sns.distplot(
-                        theseFeat, ax=ax[3],
+                        theseWfEns, ax=ax[3],
                         label=summaryText,
                         # bins=np.arange(0, 5, 0.2)
                         )
                     # ax[2].set_xlim([0, 5])
-                    print(summaryText)
                     ax[3].set_xlabel('Squared sum of residual waveform')
                     ax[3].set_ylabel('Count (normalized)')
+                    ###########
+                    theseConfs = np.array(self.catalogue['classifier_confidences'][idx])
+                    this95 = (
+                        np.nanmean(theseConfs) +
+                        2 * np.nanstd(theseConfs))
+                    summaryText = 'clus {}, 95% < {}, {} total'.format(idx, this95, len(theseConfs))
+                    sns.distplot(
+                        theseConfs, ax=ax[4],
+                        label=summaryText,
+                        # bins=np.arange(0, 5, 0.2)
+                        )
+                    # ax[2].set_xlim([0, 5])
+                    ax[4].set_xlabel('Classifier confidence values')
+                    ax[4].set_ylabel('Count (normalized)')
                 except Exception:
                     print('Error in peeler.run_offline_loop_one_segment( diagnostic plots')
             plt.legend()
@@ -655,7 +684,7 @@ class Peeler(OpenCL_Helper):
                 # take it if better
                 #TODO debug peak shift
                 if np.abs(jitter) > 0.5 and label >=0:
-                    prev_ind, prev_label, prev_jitter =ind, label, jitter
+                    prev_ind, prev_label, prev_jitter = ind, label, jitter
                     
                     shift = -int(np.round(jitter))
                     #~ print('classify and align shift', shift)
@@ -682,7 +711,6 @@ class Peeler(OpenCL_Helper):
                             else:
                                 #~ print('no keep shift worst jitter')
                                 pass
-
         #security if with jitter the index is out
         if label>=0:
             local_pos = local_index - np.round(jitter).astype('int64') + n_left
@@ -746,7 +774,10 @@ class Peeler(OpenCL_Helper):
             cluster_idx = np.argmin(s)
             #~ t2 = time.perf_counter()
             #~ print('    np.argmin V2', (t2-t1)*1000., cluster_idx)
+            # pdb.set_trace()
             k = catalogue['cluster_labels'][cluster_idx]
+            orig_wf = np.pad(waveform, ((2,2), (0,0)), 'edge')
+            feat = self.projector.transform(orig_wf[np.newaxis, :, :])
             if self.classifier is not None:
                 confidence = np.max(self.classifier.predict_proba(feat)[0])
                 temp_k = self.classifier.predict(feat)[0]
@@ -765,9 +796,8 @@ class Peeler(OpenCL_Helper):
                         cluster_idx = np.flatnonzero(catalogue['cluster_labels'] == k)[0]
             else:
                 # use k that minimizes squared distance
+                confidence = 0.
                 pass
-            orig_wf = np.pad(waveform, ((2,2), (0,0)), 'edge')
-            feat = self.projector.transform(orig_wf[np.newaxis, :, :])
         
         #~ print('cluster_idx', cluster_idx, 'k', k, 'chan', chan)
         chan = catalogue['max_on_channel'][cluster_idx]
@@ -851,22 +881,13 @@ class Peeler(OpenCL_Helper):
         energy_reduction = wf_energy - resid_energy
         #
         # minimizes_energy = energy_reduction > 0
-        if self.energy_reduction_threshold is not None:
-            minimizes_energy = energy_reduction > self.energy_reduction_threshold # minimizes energy *enough*
-        else:
-            minimizes_energy = True
+        minimizes_energy = energy_reduction > self.energy_reduction_threshold # minimizes energy *enough*
         #
-        if self.shape_distance_threshold is not None:
-            shape_criterion = (pred_distance < self.shape_distance_threshold) # keep if
-            shape_excluder = (pred_distance > self.shape_distance_threshold) # exclude if
-            #
-            feat_criterion = (feat_distance < self.shape_distance_threshold)
-            feat_excluder = (feat_distance > self.shape_distance_threshold)
-        else:
-            shape_criterion = True # keep if
-            shape_excluder = False # exclude if
-            feat_criterion = True
-            feat_excluder = False
+        shape_criterion = (pred_distance < self.shape_distance_threshold) # keep if
+        shape_excluder = (pred_distance > self.shape_distance_threshold) # exclude if
+        #
+        feat_criterion = (feat_distance < self.shape_distance_threshold)
+        feat_excluder = (feat_distance > self.shape_distance_threshold)
         # 
         passes_exclusion_criterion = (not (shape_excluder or feat_excluder))
         if self.classifier is not None:
@@ -878,16 +899,18 @@ class Peeler(OpenCL_Helper):
         else:
             passes_inclusion_criterion = (
                 minimizes_energy &
-                # (shape_criterion or feat_criterion) &  # satisifies at least one condition
+                (shape_criterion or feat_criterion) &  # satisifies at least one condition
                 passes_exclusion_criterion  # is not excluded for any reason
                 )
         # log quality measurements
-        if (passes_inclusion_criterion):
+        # note that, if abs(jitter1) is > .5, we will re-align the wvf and try again anyway
+        if (passes_inclusion_criterion) and (np.abs(jitter1) < 0.5):
             self.catalogue['template_distances'][cluster_idx].append(pred_distance)
             self.catalogue['energy_reductions'][cluster_idx].append(energy_reduction)
             self.catalogue['resid_energies'][cluster_idx].append(resid_energy)
             self.catalogue['feat_distances'][cluster_idx].append(feat_distance)
-        if self.debugging:
+            self.catalogue['classifier_confidences'][cluster_idx].append(confidence)
+        if self.debugging and (np.abs(jitter1) < 0.5):
             # show near exclusions
             if self.shape_distance_threshold is not None:
                 near_miss = pred_distance > (self.shape_distance_threshold * .9)
@@ -903,6 +926,7 @@ class Peeler(OpenCL_Helper):
                 plotX = (3e1 ** -1) * np.arange(0, wf.shape[0])
                 ax[0].plot(plotX, wf / norm_factor, label='waveform, cluster {}'.format(k))
                 ax[0].plot(plotX, pred_wf / norm_factor, label='template waveform')
+                ax[0].plot(plotX, wf0 / norm_factor, label='template waveform (no derivative)')
                 ax[0].autoscale(enable=False)
                 # ax[0].plot((pred_wf + 3) / norm_factor, 'k--')
                 # ax[0].plot((pred_wf - 3) / norm_factor, 'k--')

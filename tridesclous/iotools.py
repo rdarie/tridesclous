@@ -4,7 +4,8 @@ import io
 import sys
 import shutil
 import gc
-
+import pdb
+import traceback
 import numpy as np
 
 class ArrayCollection:
@@ -243,7 +244,12 @@ class ArrayCollection:
                 dtype = np.dtype([ (k,v) for k,v in d[name]['dtype']])
             shape = d[name]['shape']
             if np.prod(d[name]['shape'], dtype=np.int64)>0:
-                arr = np.memmap(self._fname(name), dtype=dtype, mode='r+')
+                try:
+                    arr = np.memmap(self._fname(name), dtype=dtype, mode='r+')
+                except Exception:
+                    print('\nError while loading {} from {}!\n'.format(name, self._fname(name)))
+                    traceback.print_exc()
+                    raise
                 arr = arr[:np.prod(shape, dtype=np.int64)]
                 arr = arr.reshape(shape)
             else:

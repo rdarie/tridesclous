@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from urllib.request import urlretrieve
 import pickle
-
+import pdb
 from .datasource import data_source_classes
 from .iotools import ArrayCollection
 from .tools import download_probe, create_prb_file_from_dict, fix_prb_file_py2
@@ -104,7 +104,7 @@ class DataIO:
         
         self.info_filename = os.path.join(self.dirname, 'info.json')
         if not os.path.exists(self.info_filename):
-            #first init
+            # first init
             self.info = {}
             self.flush_info()
             self.datasource = None
@@ -387,6 +387,7 @@ class DataIO:
         for chan_grp in self.channel_groups.keys():
             self.segments_path[chan_grp] = []
             cg_path = os.path.join(self.dirname, 'channel_group_{}'.format(chan_grp))
+            # print(cg_path)
             self.channel_group_path[chan_grp] = cg_path
             if not os.path.exists(cg_path):
                 os.mkdir(cg_path)

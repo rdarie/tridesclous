@@ -179,7 +179,7 @@ class CatalogueConstructor:
     """.format(_dtype_peak, _dtype_cluster)
     def __init__(
             self, dataio, chan_grp=None, name='catalogue_constructor',
-            make_classifier=False, classifier_opts=None):
+            make_classifier=False, classifier_opts=None, refit_projector=False):
         """
         Parameters
         ----------
@@ -223,6 +223,7 @@ class CatalogueConstructor:
         self.projector = None
         self.make_classifier = make_classifier
         self.classifier_opts = classifier_opts
+        self.refit_projector = refit_projector
 
     def flush_info(self):
         """ Flush info (mainly parameters) to json files.
@@ -1418,7 +1419,7 @@ class CatalogueConstructor:
         self._reset_arrays(_persistent_metrics)
 
     def make_catalogue(
-            self, refit_projector=True):
+            self):
         #TODO: offer possibility to resample some waveforms or choose the number
         
         t1 = time.perf_counter()
@@ -1462,6 +1463,7 @@ class CatalogueConstructor:
         #
         ccFolderName = os.path.dirname(self.info_filename)
         projectorPath = os.path.join(ccFolderName, 'projector.pickle')
+        supervisedProjectorPath = os.path.join(ccFolderName, 'supervised_projector.pickle')
         if self.projector is None:
             with open(projectorPath, 'rb') as f:
                 self.projector = pickle.load(f)['projector']
@@ -1487,22 +1489,25 @@ class CatalogueConstructor:
                 self.projector.umap.keras_fit_kwargs = {'verbose': 2, 'callbacks': callbacks}
         hasWvfMask = self.all_peaks['cluster_label'] > (-11)
         trainingLabels = self.all_peaks['cluster_label'][hasWvfMask]
-        if refit_projector:
+        if self.refit_projector:
             self.projector.fit(self.some_waveforms, labels=trainingLabels)
+        else:
+            if os.path.exists(supervisedProjectorPath):
+                os.remove(supervisedProjectorPath)
         newFeatures = self.projector.transform(self.some_waveforms)
         #
-        supervisedProjectorPath = os.path.join(ccFolderName, 'supervised_projector.pickle')
-        if 'GlobalPUMAP' in self.projector.__repr__():
-            # shutil.copyfile(
-            #     os.path.join(ccFolderName, 'projector.pickle'),
-            #     os.path.join(ccFolderName, 'supervised_projector.pickle')
-            #     )
-            saveSubfolderPath = os.path.join(ccFolderName, 'supervised-umap')
-            if not os.path.exists(saveSubfolderPath):
-                os.makedirs(saveSubfolderPath)
-                self.projector.umap.save(saveSubfolderPath, useH5=False)
-        with open(supervisedProjectorPath, 'wb') as f:
-            pickle.dump({'projector': self.projector}, f)
+        if self.refit_projector:
+            if 'GlobalPUMAP' in self.projector.__repr__():
+                # shutil.copyfile(
+                #     os.path.join(ccFolderName, 'projector.pickle'),
+                #     os.path.join(ccFolderName, 'supervised_projector.pickle')
+                #     )
+                saveSubfolderPath = os.path.join(ccFolderName, 'supervised-umap')
+                if not os.path.exists(saveSubfolderPath):
+                    os.makedirs(saveSubfolderPath)
+                    self.projector.umap.save(saveSubfolderPath, useH5=False)
+            with open(supervisedProjectorPath, 'wb') as f:
+                pickle.dump({'projector': self.projector}, f)
         if self.make_classifier:
             classifierPath = os.path.join(ccFolderName, 'classifier.pickle')
             # we create an instance of Neighbours Classifier and fit the data.
@@ -1516,7 +1521,8 @@ class CatalogueConstructor:
             else:
                 pass
                 # TODO: implement custom classifier training
-            clf.fit(newFeatures, y=trainingLabels)
+            clusteredMask = (trainingLabels >= (-1))
+            clf.fit(newFeatures[clusteredMask, :], y=trainingLabels[clusteredMask])
             with open(classifierPath, 'wb') as f:
                 pickle.dump({'classifier': clf}, f)
         #~ print('peak_width', self.catalogue['peak_width'])
